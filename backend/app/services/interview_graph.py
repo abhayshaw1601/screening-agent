@@ -54,17 +54,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Third-party imports
 # ---------------------------------------------------------------------------
-try:
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from langchain_core.prompts import ChatPromptTemplate
-    from langgraph.graph import StateGraph, START, END
-    from langgraph.checkpoint.memory import InMemorySaver
-except ImportError as exc:
-    logger.error(
-        "Missing required packages. Install them with:\n"
-        "  uv pip install langchain-google-genai langgraph"
-    )
-    raise SystemExit(1) from exc
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+
 
 # ---------------------------------------------------------------------------
 # Configuration

@@ -36,18 +36,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Third-party / LangChain imports
 # ---------------------------------------------------------------------------
-try:
-    from langchain_community.document_loaders import PyPDFLoader
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_google_genai import GoogleGenAIEmbeddings
-    from langchain_chroma import Chroma
-except ImportError as exc:
-    logger.error(
-        "Missing required packages. Install them with:\n"
-        "  uv pip install langchain langchain-community langchain-text-splitters "
-        "langchain-google-genai langchain-chroma chromadb pypdf"
-    )
-    raise SystemExit(1) from exc
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenAIEmbeddings
+from langchain_chroma import Chroma
+
 
 # ---------------------------------------------------------------------------
 # Configuration constants

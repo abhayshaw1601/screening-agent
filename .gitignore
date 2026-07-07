@@ -20,6 +20,9 @@ env/
 # ── ChromaDB vector store ──
 chroma_db/
 
+# ── SQLite database ──
+*.db
+
 # ── IDE / Editor ──
 .vscode/
 .idea/
@@ -46,3 +49,4 @@ out/
 
 #skill
 .agents
+skills-lock.json
