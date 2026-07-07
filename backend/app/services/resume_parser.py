@@ -97,3 +97,28 @@ def extract_skills_from_pdf(file_bytes: bytes) -> list[str]:
 
     logger.info("   → Matched %d skill(s): %s", len(found), found)
     return found
+
+
+def extract_resume_text_from_pdf(file_bytes: bytes) -> str:
+    """Extract raw text content from raw PDF bytes.
+
+    Parameters
+    ----------
+    file_bytes : bytes
+        Raw binary content of the PDF resume.
+
+    Returns
+    -------
+    str
+        Extracted raw text content of the resume pages.
+    """
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+    except Exception as exc:
+        logger.error("Failed to parse PDF: %s", exc)
+        raise ValueError("Uploaded file is not a valid PDF.") from exc
+
+    full_text = "\n".join(
+        page.extract_text() or "" for page in reader.pages
+    )
+    return full_text.strip()

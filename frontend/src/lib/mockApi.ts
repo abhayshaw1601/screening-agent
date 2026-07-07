@@ -38,12 +38,33 @@ const QUESTIONS_MOCK: Record<string, string[]> = {
     "What are some strategies to reduce memory footprint when training a very large deep learning model?",
     "What is Retrieval-Augmented Generation (RAG), and what are the main factors that affect its retrieval accuracy?",
   ],
+  "Frontend Engineer": [
+    "How does the React virtual DOM work under the hood, and how do concurrent features change rendering?",
+    "Can you explain standard web optimization techniques like code splitting, lazy loading, and critical CSS rendering?",
+    "How do you secure modern web applications against common security vulnerabilities like XSS and CSRF?",
+    "What is the difference between Server-Side Rendering (SSR), Static Site Generation (SSG), and ISR in Next.js?",
+    "How do you handle complex client-side state synchronization across multiple non-hierarchical UI components?",
+  ],
   "Backend Engineer": [
     "How do you design a database schema to support scaling writes in a high-concurrency e-commerce application?",
     "Can you explain the difference between optimistic and pessimistic locking in databases?",
     "What are the advantages of FastAPI over Flask, particularly regarding asynchronous request handling?",
     "How would you implement secure token-based user authentication and session management?",
     "What is the role of a message broker like RabbitMQ or Kafka in decoupling microservices?",
+  ],
+  "Full Stack Engineer": [
+    "How do you design a scalable microservices architecture incorporating Next.js SSR on the frontend and FastAPI on the backend?",
+    "Can you detail the benefits and challenges of deploying serverless database solutions (like Neon or Supabase) in production?",
+    "How do you handle CORS errors and set up secure sessions across differing frontend and backend subdomains?",
+    "What is your strategy for optimizing API response latencies and database indices on heavy read-heavy tables?",
+    "How do you implement atomic database transactions across multiple distributed nodes or collections?",
+  ],
+  "DevOps Engineer": [
+    "How do you design a high-availability infrastructure utilizing container orchestration systems like Kubernetes?",
+    "Can you explain the principles of GitOps, and how tooling like ArgoCD or Flux coordinates with stateful systems?",
+    "What is the difference between rolling deployments, blue-green deployments, and canary releases, and when do you use each?",
+    "How do you secure your CI/CD build runners and manage secrets dynamically using systems like HashiCorp Vault?",
+    "How do you set up centralized logging and tracing using the Prometheus/Grafana or ELK stack for server microservices?",
   ],
   "General / Other": [
     "Tell me about a challenging technical project you worked on and how you resolved the obstacles.",

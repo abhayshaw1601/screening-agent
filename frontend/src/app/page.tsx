@@ -19,12 +19,7 @@ import {
   X as XIcon,
   ArrowUp
 } from "lucide-react";
-import {
-  mockStartInterview,
-  mockSubmitAnswer,
-  mockGetSummary,
-  LogEntry
-} from "../lib/mockApi";
+import { LogEntry } from "../lib/mockApi";
 import { Spinner } from "../components/ui/spinner";
 import {
   Attachment,
@@ -43,12 +38,12 @@ function parseInlineMarkdown(text: string): React.ReactNode[] | string {
   const regex = /(\*\*|__)(.*?)\1|(\*|_)(.*?)\3/g;
   let match;
   let lastIndex = 0;
-  
+
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    
+
     if (match[1]) {
       parts.push(
         <strong className="font-bold text-white" key={match.index}>
@@ -62,14 +57,14 @@ function parseInlineMarkdown(text: string): React.ReactNode[] | string {
         </em>
       );
     }
-    
+
     lastIndex = regex.lastIndex;
   }
-  
+
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex));
   }
-  
+
   return parts.length > 0 ? parts : text;
 }
 
@@ -117,6 +112,9 @@ function renderMarkdown(text: string): React.ReactNode {
 }
 
 function calculateMetrics(summary: string, logs: LogEntry[]) {
+  console.log("=== CALCULATING METRICS FOR EVALUATION SUMMARY ===");
+  console.log("Summary Text:", summary);
+  
   let rawScore = 8.0;
   if (summary) {
     const scoreRegex = /(?:score|rating)\D*(\d+(?:\.\d+)?)\s*\/\s*10/i;
@@ -137,6 +135,8 @@ function calculateMetrics(summary: string, logs: LogEntry[]) {
       }
     }
   }
+  
+  console.log(">>> EXTRACTED RAW SCORE:", rawScore);
 
   const techDepth = Math.round(rawScore * 10);
 
@@ -256,13 +256,22 @@ export default function WorkspacePage() {
     setWelcomeError("");
 
     try {
-      // Simulate parsing of resume and extracting mock skills
-      const extractedMockSkills = selectedRole === "AI/ML Engineer"
-        ? ["Python", "PyTorch", "Transformers", "SQL", "LLM", "RAG"]
-        : ["FastAPI", "Python", "SQL", "Docker", "REST", "Git"];
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+      const formData = new FormData();
+      formData.append("role", selectedRole);
+      formData.append("file", resumeFile);
 
-      // Trigger Start API
-      const res = await mockStartInterview(selectedRole, extractedMockSkills);
+      const response = await fetch(`${apiBase}/api/interview/start`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to initialize interview session.");
+      }
+
+      const res = await response.json();
 
       setSessionId(res.session_id);
       setSkills(res.skills);
@@ -277,7 +286,7 @@ export default function WorkspacePage() {
 
       setScreen("CHAT");
     } catch (err: any) {
-      setWelcomeError("Failed to initialize interview session. Please try again.");
+      setWelcomeError(err.message || "Failed to initialize interview session. Ensure the backend is active.");
     } finally {
       setIsProcessingPdf(false);
     }
@@ -296,6 +305,11 @@ export default function WorkspacePage() {
     setIsSubmitting(true);
     setIsWaitingForAi(true);
 
+    const isFinalStep = currentStep === 5;
+    if (isFinalStep) {
+      setScreen("INSIGHTS");
+    }
+
     // Add candidate's message locally
     setChatLog((prev) => [
       ...prev,
@@ -307,14 +321,39 @@ export default function WorkspacePage() {
     ]);
 
     try {
-      const res = await mockSubmitAnswer(sessionId, answerToSubmit);
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+      const response = await fetch(`${apiBase}/api/interview/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, answer: answerToSubmit }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to submit answer.");
+      }
+
+      const res = await response.json();
 
       if (res.is_completed) {
-        // Fetch full summary to present historical transcripts side-by-side
-        const summary = await mockGetSummary(sessionId);
-        setEvaluationSummary(summary.evaluation_summary || "");
-        setHistoricalLogs(summary.logs);
+        // Transition to INSIGHTS immediately so the skeleton dashboard is shown
         setScreen("INSIGHTS");
+
+        // Fetch full summary to present historical transcripts side-by-side
+        const summaryRes = await fetch(`${apiBase}/api/interview/summary/${sessionId}`);
+        if (!summaryRes.ok) {
+          throw new Error("Failed to load completed session summary.");
+        }
+        const summary = await summaryRes.json();
+        setEvaluationSummary(summary.evaluation_summary || "");
+
+        // Convert timestamp strings from backend schema back to Date objects in the frontend logs
+        const formattedLogs = (summary.logs || []).map((log: any) => ({
+          ...log,
+          timestamp: log.timestamp ? new Date(log.timestamp) : null
+        }));
+
+        setHistoricalLogs(formattedLogs);
       } else {
         setCurrentStep(res.current_step);
         // Append AI question to chat log
@@ -327,8 +366,17 @@ export default function WorkspacePage() {
           }
         ]);
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      // Revert screen to CHAT so the user can see the error in the chat log
+      setScreen("CHAT");
+      setChatLog((prev) => [
+        ...prev,
+        {
+          sender: "AI",
+          text: `[SYSTEM ERROR]: ${err.message || "Failed to communicate with screening engine."}`,
+          timestamp: new Date()
+        }
+      ]);
     } finally {
       setIsSubmitting(false);
       setIsWaitingForAi(false);
@@ -397,14 +445,14 @@ export default function WorkspacePage() {
             className="w-full max-w-5xl z-10"
           >
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
-              
+
               {/* Left Column: Heading and features */}
               <div className="lg:col-span-7 text-left space-y-6">
-                <div className="flex items-center gap-2 text-white/80">
+                {/* <div className="flex items-center gap-2 text-white/80">
                   <span className="text-[10px] font-mono tracking-wider uppercase bg-white/10 px-2.5 py-1 rounded border border-white/5">
                     Phase 4 Verification
                   </span>
-                </div>
+                </div> */}
                 <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold tracking-tight text-white leading-tight font-sans">
                   Screen Better. <br />
                   Interview Faster. <br />
@@ -430,6 +478,7 @@ export default function WorkspacePage() {
 
               {/* Right Column: Ingestion Card Box */}
               <div className="lg:col-span-5 bg-white/[0.03] border border-white/10 p-6 md:p-8 rounded-xl space-y-6">
+
                 {/* Job Role Dropdown */}
                 <div className="flex flex-col gap-2">
                   <label className="text-[10px] font-mono uppercase tracking-wider text-white/40">Target Role</label>
@@ -440,7 +489,10 @@ export default function WorkspacePage() {
                       className="w-full bg-[#111218] border border-white/10 rounded-md px-4 py-3 text-xs font-mono text-white outline-none focus:border-white/30 transition-all appearance-none cursor-pointer"
                     >
                       <option value="AI/ML Engineer">AI/ML Engineer</option>
+                      <option value="Frontend Engineer">Frontend Engineer</option>
                       <option value="Backend Engineer">Backend Engineer</option>
+                      <option value="Full Stack Engineer">Full Stack Engineer</option>
+                      <option value="DevOps Engineer">DevOps Engineer</option>
                       <option value="General / Other">General / Other</option>
                     </select>
                     <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-white/40">
@@ -452,7 +504,7 @@ export default function WorkspacePage() {
                 {/* Custom File Upload Dropzone */}
                 <div className="flex flex-col gap-2">
                   <label className="text-[10px] font-mono uppercase tracking-wider text-white/40">Upload PDF Resume</label>
-                  
+
                   {isProcessingPdf ? (
                     /* Rectangular uploading card */
                     <Attachment state="uploading" className="w-full bg-white/[0.02] border-white/10 rounded-md">
@@ -530,12 +582,12 @@ export default function WorkspacePage() {
                 </div>
 
                 {/* Error alerts */}
-                {welcomeError && (
+                {/* {welcomeError && (
                   <div className="p-3.5 rounded-md bg-white/5 border border-white/10 text-[11px] font-mono text-white flex items-center gap-2">
                     <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping" />
                     {welcomeError}
                   </div>
-                )}
+                )} */}
 
                 {/* Submit CTA - Solid White like WriteMate */}
                 <button
@@ -711,99 +763,179 @@ export default function WorkspacePage() {
             className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-6 z-10"
           >
 
-            {/* Column A: Evaluation Report */}
-            <div className="lg:col-span-2 space-y-6">
-              <div className="bg-white/[0.02] border border-white/10 p-6 md:p-8 rounded-xl">
-                <div className="flex items-center gap-2 text-white/60 mb-4">
-                  <Award className="w-4.5 h-4.5" />
-                  <span className="text-[10px] font-mono uppercase tracking-wider">Evaluation Report</span>
-                </div>
-                <h2 className="text-lg md:text-xl font-bold mb-8 text-white uppercase font-mono tracking-tight">Performance Summary</h2>
+            {!evaluationSummary ? (
+              /* High-Premium Pulsing Skeleton Report Layout */
+              <>
+                {/* Column A: Evaluation Report Skeleton */}
+                <div className="lg:col-span-2 space-y-6">
+                  <div className="bg-white/[0.02] border border-white/10 p-6 md:p-8 rounded-xl">
+                    <div className="flex items-center gap-2 text-white/40 mb-4 animate-pulse">
+                      <Award className="w-4.5 h-4.5" />
+                      <div className="h-2.5 bg-white/20 rounded w-28" />
+                    </div>
+                    <div className="h-5 bg-white/10 rounded w-1/3 mb-8 animate-pulse" />
 
-                {/* 3 Performance metrics cards with staggered reveal */}
-                <div className="grid grid-cols-3 gap-4 mb-8">
-                  {(() => {
-                    const metrics = calculateMetrics(evaluationSummary, historicalLogs);
-                    return [
-                      { title: "Technical Depth", score: metrics.techDepth, label: "Textbook Grounded" },
-                      { title: "Communication", score: metrics.communication, label: "Syntactic Layout" },
-                      { title: "Completeness", score: metrics.completeness, label: "Turn Limit Met" },
-                    ].map((metric, i) => (
-                      <motion.div
-                        key={metric.title}
-                        initial={{ opacity: 0, y: 15 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{
-                          type: "spring",
-                          stiffness: 260,
-                          damping: 25,
-                          delay: i * 0.05,
-                        }}
-                        className="p-4 bg-[#111218] border border-white/10 rounded-md"
-                      >
-                        <span className="text-[9px] font-mono uppercase text-white/40 tracking-wider">
-                          {metric.title}
-                        </span>
-                        <div className="text-lg font-bold text-white font-mono mt-1">
-                          {metric.score}
+                    {/* 3 Performance metrics skeleton cards */}
+                    <div className="grid grid-cols-3 gap-4 mb-8">
+                      {[1, 2, 3].map((i) => (
+                        <div
+                          key={i}
+                          className="p-4 bg-[#111218] border border-white/5 rounded-md space-y-3 animate-pulse"
+                        >
+                          <div className="h-2 bg-white/20 rounded w-2/3" />
+                          <div className="h-5 bg-white/10 rounded w-1/2" />
+                          <div className="h-2 bg-white/20 rounded w-3/4" />
                         </div>
-                        <div className="text-[9px] font-mono text-white/30 mt-1">
-                          {metric.label}
-                        </div>
-                      </motion.div>
-                    ));
-                  })()}
+                      ))}
+                    </div>
+
+                    {/* Performance description skeleton lines */}
+                    <div className="border-t border-white/10 pt-6 space-y-4 animate-pulse">
+                      <div className="h-2.5 bg-white/20 rounded w-1/4 mb-3" />
+                      <div className="h-3 bg-white/10 rounded w-full" />
+                      <div className="h-3 bg-white/10 rounded w-11/12" />
+                      <div className="h-3 bg-white/10 rounded w-5/6" />
+                      <div className="h-3 bg-white/10 rounded w-full" />
+                      <div className="h-3 bg-white/10 rounded w-3/4" />
+                      
+                      <div className="h-2.5 bg-white/20 rounded w-1/5 mt-6 mb-3" />
+                      <div className="h-3 bg-white/10 rounded w-full" />
+                      <div className="h-3 bg-white/10 rounded w-5/6" />
+                      <div className="h-3 bg-white/10 rounded w-11/12" />
+                    </div>
+                  </div>
                 </div>
 
-                {/* Performance description */}
-                <div className="prose prose-invert max-w-none text-xs text-white/80 leading-relaxed border-t border-white/10 pt-6">
-                  {renderMarkdown(evaluationSummary)}
-                </div>
-              </div>
-            </div>
-
-            {/* Column B: Transcript Tree */}
-            <div className="lg:col-span-1 space-y-6">
-              <div className="bg-white/[0.02] border border-white/10 p-6 rounded-xl flex flex-col max-h-[80vh] overflow-hidden">
-                <div className="flex items-center gap-2 text-white/60 mb-5 flex-shrink-0">
-                  <MessageSquare className="w-4 h-4" />
-                  <span className="text-[10px] font-mono uppercase tracking-wider">Q&A Transcript Tree</span>
-                </div>
-
-                {/* Scrollable list */}
-                <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-                  {historicalLogs.map((log, index) => (
-                    <div key={index} className="p-4 bg-[#111218] border border-white/10 rounded-md space-y-3">
-                      <div className="flex items-start gap-2">
-                        <span className="text-[9px] font-mono font-bold px-2 py-0.5 bg-white text-black rounded border border-white/5">
-                          Q{index + 1}
-                        </span>
-                        <p className="text-xs font-semibold text-white/90 leading-normal font-sans">{log.question}</p>
+                {/* Column B: Transcript Tree Skeleton */}
+                <div className="lg:col-span-1 space-y-6">
+                  <div className="bg-white/[0.02] border border-white/10 p-6 rounded-xl flex flex-col h-[70vh] justify-between">
+                    <div className="space-y-5 flex-1 overflow-hidden">
+                      <div className="flex items-center gap-2 text-white/40 mb-5 animate-pulse">
+                        <MessageSquare className="w-4 h-4" />
+                        <div className="h-2.5 bg-white/20 rounded w-36" />
                       </div>
 
-                      <div className="flex items-start gap-2 border-t border-white/5 pt-2.5">
-                        <span className="text-[9px] font-mono font-bold px-2 py-0.5 bg-white/10 text-white/40 rounded border border-white/5">
-                          A{index + 1}
-                        </span>
-                        <p className="text-xs text-white/50 leading-relaxed italic font-sans">
-                          &ldquo;{log.answer || "(no response registered)"}&rdquo;
-                        </p>
+                      {/* Pulse cards */}
+                      <div className="space-y-4 pr-1 animate-pulse">
+                        {[1, 2, 3].map((i) => (
+                          <div key={i} className="p-4 bg-[#111218] border border-white/5 rounded-md space-y-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-4 bg-white/20 rounded" />
+                              <div className="h-2 bg-white/10 rounded w-3/4" />
+                            </div>
+                            <div className="flex items-center gap-2 border-t border-white/5 pt-2.5">
+                              <div className="w-6 h-4 bg-white/10 rounded" />
+                              <div className="h-2 bg-white/5 rounded w-1/2" />
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  ))}
+
+                    {/* Recruiter waiting status indicators */}
+                    <div className="mt-5 p-4 bg-white/5 border border-white/10 rounded-md flex items-center justify-center gap-3">
+                      <Spinner className="text-white" />
+                      <span className="text-[11px] font-mono text-white/60 animate-pulse uppercase tracking-wider">Generating evaluation...</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Column A: Evaluation Report */}
+                <div className="lg:col-span-2 space-y-6">
+                  <div className="bg-white/[0.02] border border-white/10 p-6 md:p-8 rounded-xl">
+                    <div className="flex items-center gap-2 text-white/60 mb-4">
+                      <Award className="w-4.5 h-4.5" />
+                      <span className="text-[10px] font-mono uppercase tracking-wider">Evaluation Report</span>
+                    </div>
+                    <h2 className="text-lg md:text-xl font-bold mb-8 text-white uppercase font-mono tracking-tight">Performance Summary</h2>
+
+                    {/* 3 Performance metrics cards with staggered reveal */}
+                    <div className="grid grid-cols-3 gap-4 mb-8">
+                      {(() => {
+                        const metrics = calculateMetrics(evaluationSummary, historicalLogs);
+                        return [
+                          { title: "Technical Depth", score: metrics.techDepth, label: "Textbook Grounded" },
+                          { title: "Communication", score: metrics.communication, label: "Syntactic Layout" },
+                          { title: "Completeness", score: metrics.completeness, label: "Turn Limit Met" },
+                        ].map((metric, i) => (
+                          <motion.div
+                            key={metric.title}
+                            initial={{ opacity: 0, y: 15 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{
+                              type: "spring",
+                              stiffness: 260,
+                              damping: 25,
+                              delay: i * 0.05,
+                            }}
+                            className="p-4 bg-[#111218] border border-white/10 rounded-md"
+                          >
+                            <span className="text-[9px] font-mono uppercase text-white/40 tracking-wider">
+                              {metric.title}
+                            </span>
+                            <div className="text-lg font-bold text-white font-mono mt-1">
+                              {metric.score}
+                            </div>
+                            <div className="text-[9px] font-mono text-white/30 mt-1">
+                              {metric.label}
+                            </div>
+                          </motion.div>
+                        ));
+                      })()}
+                    </div>
+
+                    {/* Performance description */}
+                    <div className="prose prose-invert max-w-none text-xs text-white/80 leading-relaxed border-t border-white/10 pt-6">
+                      {renderMarkdown(evaluationSummary)}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Action - Solid white card */}
-                <button
-                  onClick={handleRestart}
-                  className="w-full mt-5 py-3.5 bg-white hover:bg-white/90 text-black rounded-md text-xs font-mono font-bold flex items-center justify-center gap-2 transition-all duration-300 flex-shrink-0"
-                >
-                  Start New Session
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
+                {/* Column B: Transcript Tree */}
+                <div className="lg:col-span-1 space-y-6">
+                  <div className="bg-white/[0.02] border border-white/10 p-6 rounded-xl flex flex-col max-h-[80vh] overflow-hidden">
+                    <div className="flex items-center gap-2 text-white/60 mb-5 flex-shrink-0">
+                      <MessageSquare className="w-4 h-4" />
+                      <span className="text-[10px] font-mono uppercase tracking-wider">Q&A Transcript Tree</span>
+                    </div>
 
+                    {/* Scrollable list */}
+                    <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                      {historicalLogs.map((log, index) => (
+                        <div key={index} className="p-4 bg-[#111218] border border-white/10 rounded-md space-y-3">
+                          <div className="flex items-start gap-2">
+                            <span className="text-[9px] font-mono font-bold px-2 py-0.5 bg-white text-black rounded border border-white/5">
+                              Q{index + 1}
+                            </span>
+                            <p className="text-xs font-semibold text-white/90 leading-normal font-sans">{log.question}</p>
+                          </div>
+
+                          <div className="flex items-start gap-2 border-t border-white/5 pt-2.5">
+                            <span className="text-[9px] font-mono font-bold px-2 py-0.5 bg-white/10 text-white/40 rounded border border-white/5">
+                              A{index + 1}
+                            </span>
+                            <p className="text-xs text-white/50 leading-relaxed italic font-sans">
+                              &ldquo;{log.answer || "(no response registered)"}&rdquo;
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Action - Solid white card */}
+                    <button
+                      onClick={handleRestart}
+                      className="w-full mt-5 py-3.5 bg-white hover:bg-white/90 text-black rounded-md text-xs font-mono font-bold flex items-center justify-center gap-2 transition-all duration-300 flex-shrink-0"
+                    >
+                      Start New Session
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </motion.section>
         )}
       </AnimatePresence>

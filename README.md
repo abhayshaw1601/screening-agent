@@ -23,9 +23,11 @@ AGI Screener is a complete candidate evaluation workspace that gives hiring mana
 We have introduced the following updates to align the client workspace with a high-performance design:
 - **WriteMate-Inspired Dark Theme**: Implemented a deep pitch-dark background (`#090A0F`) layered with absolute-positioned blue radial gradient overlays, high-contrast pure white action buttons, translucent border parameters (`border-white/20`), and monospaced typography accents (`font-mono`).
 - **Wider Two-Column Layout**: Refactored the candidate welcome page into a responsive dual-column grid structure (tagline checkpoints on the left, ingestion selector controls on the right) that fills the maximum layout width and eliminates margins.
-- **Dynamic Q&A Interactions**: Configured automatic scrolling mechanisms to anchor viewport layouts to the latest messages, and focus trigger hooks to activate the inputs immediately upon new question generation.
+- **Automated Resume Details Extraction**: Automatically parses candidate Full Name, Email, and Phone Number from the uploaded PDF resume text context via Gemini during ingestion, storing details dynamically inside MongoDB.
+- **Pregenerated Questions Batching**: Uses Gemini to analyze candidate resume details and selected role to pre-generate exactly 5 sequential technical questions all at once, serving them turn-by-turn during the session.
+- **Immediate Dashboard Skeleton Loader**: Instantly moves the user to a pulsing skeleton insights dashboard as soon as the final question is answered, maintaining active UI feedback while Gemini compiles the report.
+- **Devil's Advocate Grading**: Integrated strict grading instructions in LLM evaluator prompts to score vague, brief, or superficial response logs severely (e.g. `0.5 / 10` or `2.0 / 10`).
 - **In-App Markdown Parser**: Formats bold highlights (`**`), section headings (`#`/`##`), and bulleted items (`-`) dynamically inside the candidate summary dashboard, avoiding raw markdown text blocks.
-- **Devil's Advocate Grading**: Integrated strict grading instructions in LLM evaluator node prompts and mock API handlers to score vague, brief, or placeholder responses severely (e.g. `0.5 / 10` or `3.5 / 10`).
 
 ---
 
@@ -36,32 +38,29 @@ sequenceDiagram
     participant C as Candidate
     participant F as Frontend (Next.js)
     participant B as Backend (FastAPI)
-    participant G as LangGraph Engine
-    participant D as Databases (MongoDB/ChromaDB)
+    participant D as MongoDB
 
     C->>F: Upload Resume (PDF) & Select Role
     F->>B: POST /api/interview/start (form-data)
-    B->>B: Parse PDF & Match Skill Keywords
-    B->>G: Invoke Graph (State Inception)
-    G->>D: Similarity Search (Textbook RAG context)
-    G->>G: Generate Q1 via Gemini
-    B->>D: Insert Session & First Log to MongoDB
+    B->>B: Parse PDF & Extract Raw Text Context
+    B->>B: Call Gemini (Extract Name/Email/Phone & Pregenerate 5 Questions)
+    B->>D: Insert Session Document (Name, Email, Phone, Pregenerated List, Q1 Log)
     B-->>F: Return session_id & Q1
     F-->>C: Display Q1 on screen
     
     C->>F: Submit Answer
     F->>B: POST /api/interview/submit (JSON)
     B->>D: Update MongoDB Log with Answer
-    B->>G: Resume Graph (State Update)
-    G->>G: Step < 5?
-    G-->>B: Yes (Generate Q_next & Loop)
-    B->>D: Add Next Log to MongoDB Session
-    B-->>F: Return next_question
+    B->>B: Step < 5?
+    B-->>F: Yes (Fetch Q_next from Pregenerated List)
+    F-->>C: Display Q_next
     
-    G-->>B: No (Finalize & Synthesize Evaluation Report)
-    B->>D: Mark session COMPLETED & Save Evaluation
-    B-->>F: Return evaluation_summary
-    F-->>C: Display Assessment Report & Transcript Tree
+    B-->>B: No (Final step answered)
+    Note over F,B: Transition to Insights screen (displays pulsing skeleton dashboard)
+    B->>B: Call Gemini (Grade entire Q&A transcript & parsed resume text)
+    B->>D: Mark Session COMPLETED & Save Evaluation Summary
+    B-->>F: Return completed status & evaluation_summary
+    F-->>C: Fill Report Dashboard details (scores, report prose, transcript tree)
 ```
 
 ---
@@ -174,6 +173,7 @@ To ensure the screening questions remain grounded and relevant, the system extra
 
 ## Environment Variables
 
+### Backend Configuration
 Configure these settings inside `backend/.env`:
 
 | Variable | Required | Default | Description |
@@ -183,6 +183,13 @@ Configure these settings inside `backend/.env`:
 | `MONGODB_DB_NAME` | No | `screener_db` | Collection database name inside MongoDB |
 | `APP_TITLE` | No | `PG AGI Screener API` | Name identifier for FastAPI application |
 | `MAX_INTERVIEW_QUESTIONS`| No | `5` | Turns limit before evaluation finalization |
+
+### Frontend Configuration
+Configure these settings inside `frontend/.env`:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NEXT_PUBLIC_API_URL` | No | `http://localhost:8000` | Backend API base URL for fetch requests |
 
 ---
 

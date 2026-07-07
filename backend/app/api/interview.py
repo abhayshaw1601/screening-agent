@@ -1,17 +1,12 @@
 """
 interview.py — FastAPI router for interview lifecycle management using MongoDB.
 
-Endpoints:
-    POST /api/interview/start          — start a new session from a resume PDF
-    POST /api/interview/submit         — submit an answer and get the next question
-    GET  /api/interview/summary/{id}   — fetch a completed session's full log
-
-Follows the FastAPI skill guidelines:
-    - Asynchronous route handlers (async def) for non-blocking I/O
-    - Pydantic models for request/response validation and DB documents
-    - Guard clauses / early returns for error paths
-    - HTTPException for expected errors
-    - Dependency injection for MongoDB database sessions
+Following the updated pregenerated question workflow:
+1. Ingest PDF resume text and target role.
+2. Pregenerate 5 candidate-specific technical questions all at once via Gemini.
+3. Conduct sequential chat responses turn-by-turn.
+4. Pass the full transcript of questions/answers and resume text to Gemini for grading.
+5. Save the final report in MongoDB along with candidate name, email, and phone number.
 """
 
 from __future__ import annotations
@@ -19,6 +14,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -34,21 +30,18 @@ from app.schemas.interview import (
     SubmitAnswerRequest,
     SubmitAnswerResponse,
 )
-from app.services.interview_graph import build_interview_graph
-from app.services.resume_parser import extract_skills_from_pdf
-
-# LangGraph checkpointer — InMemorySaver for dev
-from langgraph.checkpoint.memory import InMemorySaver
+from app.services.interview_graph import (
+    parse_resume_and_generate_questions,
+    evaluate_interview_transcript,
+)
+from app.services.resume_parser import (
+    extract_skills_from_pdf,
+    extract_resume_text_from_pdf,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/interview", tags=["Interview"])
-
-# ---------------------------------------------------------------------------
-# Shared LangGraph instance for the API process
-# ---------------------------------------------------------------------------
-_checkpointer = InMemorySaver()
-_graph = build_interview_graph(checkpointer=_checkpointer)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -65,10 +58,10 @@ async def start_interview(
     """Start a new interview session.
 
     1. Validate the uploaded file is a PDF.
-    2. Extract skills from the resume.
-    3. Run the first LangGraph step to generate Q1.
-    4. Persist a new rich InterviewSession document with embedded log.
-    5. Return session_id, question, and current_step.
+    2. Extract skills and raw text content from the resume PDF.
+    3. Call LLM to parse resume credentials (name, email, phone) and pregenerate questions.
+    4. Save session document including parsed credentials.
+    5. Return first question and session details.
     """
     # --- Guard: file type ---------------------------------------------------
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -87,39 +80,35 @@ async def start_interview(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # --- Extract skills -----------------------------------------------------
+    # --- Extract skills and resume text -------------------------------------
     try:
         skills = extract_skills_from_pdf(file_bytes)
+        resume_text = extract_resume_text_from_pdf(file_bytes)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
     if not skills:
-        skills = ["General"]  # fallback so the interview can still proceed
+        skills = ["General"]
         logger.warning("No skills extracted; defaulting to ['General'].")
 
     session_id = str(uuid.uuid4())
 
-    # --- Run LangGraph step 1 -----------------------------------------------
-    thread_config = {"configurable": {"thread_id": session_id}}
-    initial_state = {
-        "role": role.strip(),
-        "skills": skills,
-        "question_history": [],
-        "answer_history": [],
-        "current_question": None,
-        "question_count": 0,
-        "max_questions": settings.max_interview_questions,
-        "is_completed": False,
-        "evaluation_summary": None,
-    }
-
+    # --- LLM Parsing & Pregeneration -----------------------------------------
     try:
-        result = _graph.invoke(initial_state, thread_config)
+        result = parse_resume_and_generate_questions(role.strip(), resume_text, skills)
     except Exception as exc:
-        logger.exception("LangGraph invocation failed for session %s", session_id)
-        raise HTTPException(status_code=500, detail="Failed to generate first question.")
+        logger.exception("Failed to parse resume and pregenerate questions for session %s", session_id)
+        raise HTTPException(status_code=500, detail="Failed to initialize screening questions.")
 
-    first_question = result.get("current_question", "")
+    pregenerated = result.get("questions")
+    if not pregenerated or len(pregenerated) < 5:
+        logger.error("Pregeneration failed to yield 5 questions: %s", pregenerated)
+        raise HTTPException(status_code=500, detail="Failed to initialize 5 technical screening questions.")
+
+    first_question = pregenerated[0]
+    candidate_name = result.get("name")
+    candidate_email = result.get("email")
+    candidate_phone = result.get("phone")
 
     # --- Create embedded log & document ------------------------------------
     first_log = InterviewLogDB(
@@ -133,7 +122,12 @@ async def start_interview(
         skills=skills,
         status="ACTIVE",
         current_step=1,
-        max_questions=settings.max_interview_questions,
+        max_questions=5,
+        candidate_name=candidate_name,
+        candidate_email=candidate_email,
+        candidate_phone=candidate_phone,
+        resume_text=resume_text,
+        pregenerated_questions=pregenerated,
         logs=[first_log],
     )
 
@@ -144,7 +138,7 @@ async def start_interview(
         logger.exception("Failed to write to MongoDB for session %s", session_id)
         raise HTTPException(status_code=500, detail="Database write failed.")
 
-    logger.info("Created MongoDB session %s (role=%s, skills=%s)", session_id, role, skills)
+    logger.info("Created MongoDB session %s (name=%s, email=%s, role=%s)", session_id, candidate_name, candidate_email, role)
 
     return StartInterviewResponse(
         session_id=session_id,
@@ -169,9 +163,8 @@ async def submit_answer(
 
     1. Fetch session from MongoDB and validate ACTIVE status.
     2. Record answer into the latest embedded log item.
-    3. Rebuild histories and trigger LangGraph.
-    4. If the graph loops → embed next question, increment step, update DB.
-    5. If finalising → update status to COMPLETED and save report.
+    3. If step < 5 → Fetch pregenerated question #current_step, increment step, update DB.
+    4. If finalising (step == 5) → trigger full evaluation via Gemini, update status to COMPLETED, update DB.
     """
     # --- Fetch session ------------------------------------------------------
     try:
@@ -207,30 +200,23 @@ async def submit_answer(
     latest_log.answer = body.answer
     logger.info("Answer saved for session %s, step %d", body.session_id, session_doc.current_step)
 
-    # --- Rebuild answer_history/question_history from logs -----------------
-    question_history = [log.question for log in session_doc.logs]
-    answer_history = [log.answer for log in session_doc.logs if log.answer is not None]
+    # --- Check loop vs finalize --------------------------------------------
+    if session_doc.current_step >= len(session_doc.pregenerated_questions):
+        # --- Finalise session & Grade via Gemini ----------------------------
+        logger.info("Final turn completed. Conducting LLM strict evaluation summary...")
+        try:
+            summary = evaluate_interview_transcript(
+                role=session_doc.role,
+                skills=session_doc.skills,
+                logs=session_doc.logs,
+                resume_text=session_doc.resume_text or "",
+            )
+        except Exception as exc:
+            logger.exception("LLM evaluation execution failed: %s", exc)
+            summary = "Evaluation report generation failed. All turns were completed successfully."
 
-    # --- Resume LangGraph ---------------------------------------------------
-    thread_config = {"configurable": {"thread_id": body.session_id}}
-
-    _graph.update_state(
-        thread_config,
-        {"answer_history": answer_history},
-    )
-
-    try:
-        result = _graph.invoke(None, thread_config)
-    except Exception as exc:
-        logger.exception("LangGraph resume failed for session %s", body.session_id)
-        raise HTTPException(status_code=500, detail="Failed to advance interview state machine.")
-
-    is_completed = result.get("is_completed", False)
-
-    if is_completed:
-        # --- Finalise session -----------------------------------------------
         session_doc.status = "COMPLETED"
-        session_doc.evaluation_summary = result.get("evaluation_summary")
+        session_doc.evaluation_summary = summary
 
         try:
             await db["sessions"].update_one(
@@ -238,7 +224,7 @@ async def submit_answer(
                 {
                     "$set": {
                         "status": "COMPLETED",
-                        "evaluation_summary": session_doc.evaluation_summary,
+                        "evaluation_summary": summary,
                         "logs": [log.model_dump() for log in session_doc.logs],
                     }
                 },
@@ -253,11 +239,11 @@ async def submit_answer(
             is_completed=True,
             next_question=None,
             current_step=session_doc.current_step,
-            evaluation_summary=session_doc.evaluation_summary,
+            evaluation_summary=summary,
         )
 
-    # --- Loop: persist next question ----------------------------------------
-    next_question = result.get("current_question", "")
+    # --- Loop: advance to next pregenerated question -----------------------
+    next_question = session_doc.pregenerated_questions[session_doc.current_step]
     next_step = session_doc.current_step + 1
 
     next_log = InterviewLogDB(
@@ -280,7 +266,7 @@ async def submit_answer(
         logger.exception("Failed to add next question to MongoDB session %s", body.session_id)
         raise HTTPException(status_code=500, detail="Database write failed.")
 
-    logger.info("Next question generated for session %s (step %d)", body.session_id, next_step)
+    logger.info("Advanced to pregenerated question #%d for session %s", next_step, body.session_id)
 
     return SubmitAnswerResponse(
         is_completed=False,

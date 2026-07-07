@@ -63,7 +63,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CHAT_MODEL: str = "gemini-2.0-flash"
+CHAT_MODEL: str = "gemini-2.5-flash-lite"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -106,6 +106,168 @@ def _get_llm() -> ChatGoogleGenerativeAI:
         google_api_key=api_key,
         temperature=0.7,
     )
+
+
+def parse_resume_and_generate_questions(role: str, resume_text: str, skills: list[str]) -> dict:
+    """Extract candidate credentials and pregenerate 5 screening questions via Gemini."""
+    import json
+    llm = _get_llm()
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are an expert technical recruiter and interviewer. "
+                "Your task is to parse the candidate's resume content and generate a structured screening plan for the role of **{role}** (skills: {skills}).\n\n"
+                "Instructions:\n"
+                "1. Extract the candidate's personal details from the resume:\n"
+                "   - Full Name (if not found, return null)\n"
+                "   - Email Address (if not found, return null)\n"
+                "   - Phone Number (if not found, return null)\n"
+                "2. Pregenerate exactly 5 targeted technical screening questions:\n"
+                "   - Ground the questions in technical details from the resume.\n"
+                "   - Structure them progressively in difficulty (Q1-Q2: core, Q3-Q4: scenario/system, Q5: optimization/trade-offs).\n"
+                "3. Output ONLY a valid JSON object with the following schema (no markdown formatting, no prefix/suffix text):\n"
+                "{{\n"
+                "  \"name\": \"Candidate Full Name or null\",\n"
+                "  \"email\": \"candidate@email.com or null\",\n"
+                "  \"phone\": \"+1-234-567-8900 or null\",\n"
+                "  \"questions\": [\n"
+                "    \"Question 1\",\n"
+                "    \"Question 2\",\n"
+                "    \"Question 3\",\n"
+                "    \"Question 4\",\n"
+                "    \"Question 5\"\n"
+                "  ]\n"
+                "}}"
+            ),
+            (
+                "human",
+                "Here is the candidate's resume content to parse and generate questions for:\n"
+                "--- START RESUME ---\n"
+                "{resume_text}\n"
+                "--- END RESUME ---"
+            )
+        ]
+    )
+    chain = prompt | llm
+    try:
+        response = chain.invoke({
+            "role": role,
+            "skills": ", ".join(skills),
+            "resume_text": resume_text,
+        })
+        text = response.content.strip()
+        
+        print("\n================== RAW GEMINI RESPONSE ==================")
+        print(text)
+        print("=========================================================\n")
+        
+        # Robust cleanup of markdown wrappers using regex
+        import re
+        if "```" in text:
+            match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+            if match:
+                text = match.group(1).strip()
+            else:
+                text = text.replace("```json", "").replace("```", "").strip()
+        
+        data = json.loads(text)
+        if isinstance(data, dict):
+            qs = data.get("questions")
+            if isinstance(qs, list) and len(qs) >= 5:
+                print(">>> successfully parsed pregenerated questions: ", qs[:5])
+                return {
+                    "name": data.get("name"),
+                    "email": data.get("email"),
+                    "phone": data.get("phone"),
+                    "questions": [str(q) for q in qs[:5]]
+                }
+            else:
+                print(">>> WARNING: questions key not found or less than 5 items in parsed dict")
+        else:
+            print(">>> WARNING: JSON did not parse as a dictionary")
+    except Exception as exc:
+        print("\n!!! ERROR PARSING LLM RESPONSE:")
+        import traceback
+        traceback.print_exc()
+        logger.exception("Failed to parse resume and pre-generate questions via Gemini")
+    
+    # Fallback response
+    return {
+        "name": None,
+        "email": None,
+        "phone": None,
+        "questions": [
+            f"What is your approach to designing scalable structures as a {role}?",
+            f"How do you manage complex data dependencies and ensure security for skills like {', '.join(skills[:3])}?",
+            f"Can you explain a challenging technical trade-off you had to make in your recent role?",
+            f"How do you ensure zero-downtime deployments and operational reliability in production?",
+            f"Describe how you profile, debug, and optimize performance bottleneck latency constraints."
+        ]
+    }
+
+
+def evaluate_interview_transcript(role: str, skills: list[str], logs: list, resume_text: str) -> str:
+    """Use Gemini to evaluate candidate's answers against pregenerated questions and resume context."""
+    llm = _get_llm()
+    
+    # Format Q&A transcript
+    transcript_lines = []
+    for i, log in enumerate(logs):
+        transcript_lines.append(f"Q{i+1}: {log.question}")
+        transcript_lines.append(f"A{i+1}: {log.answer or '(no response)'}")
+    transcript = "\n\n".join(transcript_lines)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a strict, highly critical technical evaluator acting as a devil's advocate. "
+                "Evaluate this candidate's interview performance for the role of **{role}** (skills: {skills}).\n\n"
+                "Candidate's Resume:\n"
+                "--- START RESUME ---\n"
+                "{resume_text}\n"
+                "--- END RESUME ---\n\n"
+                "Interview Q&A Transcript:\n"
+                "--- START TRANSCRIPT ---\n"
+                "{transcript}\n"
+                "--- END TRANSCRIPT ---\n\n"
+                "Produce a structured evaluation report that includes:\n"
+                "1. **Overall Assessment** — 2–3 sentence critical analysis of candidate's core depth.\n"
+                "2. **Strengths** — bullet points.\n"
+                "3. **Areas for Improvement** — bullet points highlighting sparse explanations or failures.\n"
+                "4. **Recommended Next Steps** — e.g. reject, re-evaluate, or advance.\n"
+                "5. **Score** — a rating out of 10. Grading must be extremely strict and unforgiving. "
+                "If the candidate gives bad, short, vague, placeholder, or superficial answers, "
+                "be a devil's advocate and score them severely (e.g. 0.5/10, 1/10, or 2/10). "
+                "Do not award high scores (8/10 or above) unless answers are exceptionally deep, precise, and correct.",
+            ),
+            (
+                "human",
+                "Please evaluate this candidate.",
+            ),
+        ]
+    )
+    
+    chain = prompt | llm
+    try:
+        response = chain.invoke({
+            "role": role,
+            "skills": ", ".join(skills),
+            "resume_text": resume_text,
+            "transcript": transcript,
+        })
+        eval_text = response.content.strip()
+        print("\n================== RAW EVALUATION REPORT ==================")
+        print(eval_text)
+        print("===========================================================\n")
+        return eval_text
+    except Exception as exc:
+        print("\n!!! ERROR IN LLM EVALUATION GENERATION:")
+        import traceback
+        traceback.print_exc()
+        logger.exception("Failed to generate strict evaluation summary")
+        return "Failed to generate evaluation report."
 
 
 # ═══════════════════════════════════════════════════════════════════════════

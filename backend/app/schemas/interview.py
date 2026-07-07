@@ -94,6 +94,11 @@ class InterviewSessionDB(BaseModel):
     current_step: int = 0
     max_questions: int = 5
     evaluation_summary: Optional[str] = None
+    candidate_name: Optional[str] = None
+    candidate_email: Optional[str] = None
+    candidate_phone: Optional[str] = None
+    resume_text: Optional[str] = None
+    pregenerated_questions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
