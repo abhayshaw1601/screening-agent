@@ -18,6 +18,17 @@ AGI Screener is a complete candidate evaluation workspace that gives hiring mana
 
 ---
 
+## Premium Visual & Grading Overhauls
+
+We have introduced the following updates to align the client workspace with a high-performance design:
+- **WriteMate-Inspired Dark Theme**: Implemented a deep pitch-dark background (`#090A0F`) layered with absolute-positioned blue radial gradient overlays, high-contrast pure white action buttons, translucent border parameters (`border-white/20`), and monospaced typography accents (`font-mono`).
+- **Wider Two-Column Layout**: Refactored the candidate welcome page into a responsive dual-column grid structure (tagline checkpoints on the left, ingestion selector controls on the right) that fills the maximum layout width and eliminates margins.
+- **Dynamic Q&A Interactions**: Configured automatic scrolling mechanisms to anchor viewport layouts to the latest messages, and focus trigger hooks to activate the inputs immediately upon new question generation.
+- **In-App Markdown Parser**: Formats bold highlights (`**`), section headings (`#`/`##`), and bulleted items (`-`) dynamically inside the candidate summary dashboard, avoiding raw markdown text blocks.
+- **Devil's Advocate Grading**: Integrated strict grading instructions in LLM evaluator node prompts and mock API handlers to score vague, brief, or placeholder responses severely (e.g. `0.5 / 10` or `3.5 / 10`).
+
+---
+
 ## How It Works
 
 ```mermaid
