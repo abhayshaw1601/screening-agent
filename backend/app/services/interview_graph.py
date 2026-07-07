@@ -124,7 +124,7 @@ def generate_question_node(state: InterviewState) -> dict:
     Returns a *partial* state update dict (LangGraph convention).
     """
     logger.info(
-        "🎯 [generate_question] Round %d/%d",
+        "[generate_question] Round %d/%d",
         state.question_count + 1,
         state.max_questions,
     )
@@ -210,7 +210,7 @@ def finalize_interview_node(state: InterviewState) -> dict:
     Triggered when `question_count >= max_questions` and the final
     answer has been recorded.
     """
-    logger.info("📝 [finalize_interview] Generating evaluation summary …")
+    logger.info("[finalize_interview] Generating evaluation summary ...")
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -364,7 +364,7 @@ def run_cli_interview() -> None:
     if not api_key:
         logger.error("GEMINI_API_KEY / GOOGLE_API_KEY not set.")
         raise SystemExit(1)
-    logger.info("✔ API key detected.")
+    logger.info("API key detected.")
 
     # --- Initial state ------------------------------------------------------
     initial_state = {
@@ -390,7 +390,7 @@ def run_cli_interview() -> None:
     print("=" * 60 + "\n")
 
     # --- First invocation: generates Q1 ------------------------------------
-    logger.info("▶ Starting graph — generating first question …")
+    logger.info("Starting graph — generating first question ...")
     result = interview_graph.invoke(initial_state, config)
 
     while not result.get("is_completed", False):
@@ -399,15 +399,15 @@ def run_cli_interview() -> None:
         question = result["current_question"]
 
         print(f"\n{'─' * 60}")
-        print(f"  📋 QUESTION {q_num}/{result['max_questions']}")
+        print(f"  QUESTION {q_num}/{result['max_questions']}")
         print(f"{'─' * 60}")
         print(f"\n  {question}\n")
 
         # Collect answer from terminal
         try:
-            answer = input("  ✏️  Your answer: ").strip()
+            answer = input("  Your answer: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n\n  ⚠ Interview cancelled by user.")
+            print("\n\n  Interview cancelled by user.")
             return
 
         if not answer:
@@ -425,12 +425,12 @@ def run_cli_interview() -> None:
         )
 
         # Resume the graph — it will generate the next question or finalize
-        logger.info("▶ Resuming graph …")
+        logger.info("Resuming graph ...")
         result = interview_graph.invoke(None, config)
 
     # --- Interview complete -------------------------------------------------
     print("\n" + "=" * 60)
-    print("  ✅ INTERVIEW COMPLETE")
+    print("  INTERVIEW COMPLETE")
     print("=" * 60)
 
     print(f"\n  Questions asked : {result['question_count']}")
@@ -438,12 +438,12 @@ def run_cli_interview() -> None:
 
     if result.get("evaluation_summary"):
         print(f"\n{'─' * 60}")
-        print("  📊 EVALUATION SUMMARY")
+        print("  EVALUATION SUMMARY")
         print(f"{'─' * 60}\n")
         print(result["evaluation_summary"])
 
     print("\n" + "=" * 60 + "\n")
-    logger.info("🏁 CLI interview session finished.")
+    logger.info("CLI interview session finished.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

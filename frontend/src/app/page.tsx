@@ -456,7 +456,7 @@ export default function WorkspacePage() {
               </button>
             </div>
             <p className="text-[10px] text-slate-500 mt-2 px-1 text-center md:text-left">
-              💡 Press <kbd className="font-sans border border-slate-800 px-1.5 py-0.5 rounded bg-slate-900 text-slate-400">Enter</kbd> to submit answer.
+              Note: Press <kbd className="font-sans border border-slate-800 px-1.5 py-0.5 rounded bg-slate-900 text-slate-400">Enter</kbd> to submit answer.
             </p>
           </form>
         </section>

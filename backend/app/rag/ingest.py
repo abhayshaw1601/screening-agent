@@ -81,7 +81,7 @@ def _validate_environment() -> str:
             "Export it in your shell or add it to a .env file."
         )
         raise SystemExit(1)
-    logger.info("✔ Gemini API Key detected.")
+    logger.info("Gemini API Key detected.")
     return api_key
 
 
@@ -107,7 +107,7 @@ def load_pdf(pdf_path: Path) -> list:
         logger.error("PDF not found at: %s", pdf_path)
         raise FileNotFoundError(f"PDF not found at: {pdf_path}")
 
-    logger.info("📄 Loading PDF from: %s", pdf_path)
+    logger.info("Loading PDF from: %s", pdf_path)
     loader = PyPDFLoader(str(pdf_path))
     pages = loader.load()
     logger.info("   → Loaded %d page(s).", len(pages))
@@ -121,7 +121,7 @@ def chunk_documents(
 ) -> list:
     """Split page-level documents into smaller chunks."""
     logger.info(
-        "✂️  Chunking documents (size=%d, overlap=%d) …",
+        "Chunking documents (size=%d, overlap=%d) ...",
         chunk_size,
         chunk_overlap,
     )
@@ -141,7 +141,7 @@ def create_vector_store(
     persist_dir: Path,
 ) -> Chroma:
     """Embed chunks and persist them into a local ChromaDB collection."""
-    logger.info("🧠 Generating Gemini embeddings and storing in ChromaDB …")
+    logger.info("Generating Gemini embeddings and storing in ChromaDB ...")
     logger.info("   → Persist directory : %s", persist_dir)
     logger.info("   → Collection name   : %s", COLLECTION_NAME)
 
@@ -165,7 +165,7 @@ def load_existing_store(
     persist_dir: Path,
 ) -> Chroma:
     """Load an already-persisted ChromaDB collection from disk."""
-    logger.info("📂 Loading existing ChromaDB from: %s", persist_dir)
+    logger.info("Loading existing ChromaDB from: %s", persist_dir)
 
     vector_store = Chroma(
         persist_directory=str(persist_dir),
@@ -184,13 +184,13 @@ def load_existing_store(
 
 def run_demo_query(vector_store: Chroma, query: str, k: int = TOP_K) -> None:
     """Execute a similarity search and pretty-print the results."""
-    logger.info("🔍 Running demo similarity search (k=%d) …", k)
+    logger.info("Running demo similarity search (k=%d) ...", k)
     logger.info('   Query: "%s"', query)
 
     results = vector_store.similarity_search(query, k=k)
 
     if not results:
-        logger.warning("   ⚠ No results returned. Is the collection empty?")
+        logger.warning("No results returned. Is the collection empty?")
         return
 
     print("\n" + "=" * 80)
@@ -207,7 +207,7 @@ def run_demo_query(vector_store: Chroma, query: str, k: int = TOP_K) -> None:
         print(doc.page_content)
 
     print("\n" + "=" * 80 + "\n")
-    logger.info("✅ Demo query complete.")
+    logger.info("Demo query complete.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -230,13 +230,13 @@ def main() -> None:
     # 3. Decide: ingest from scratch or reuse existing DB
     if CHROMA_PERSIST_DIR.exists() and any(CHROMA_PERSIST_DIR.iterdir()):
         logger.info(
-            "⏩ ChromaDB directory already exists at '%s'. "
+            "ChromaDB directory already exists at '%s'. "
             "Skipping ingestion to save API costs.",
             CHROMA_PERSIST_DIR,
         )
         vector_store = load_existing_store(embeddings, CHROMA_PERSIST_DIR)
     else:
-        logger.info("🆕 No existing database found. Starting full pipeline …")
+        logger.info("No existing database found. Starting full pipeline ...")
 
         # Step A — Load PDF
         pages = load_pdf(PDF_PATH)
@@ -252,7 +252,7 @@ def main() -> None:
     # 4. Smoke-test: similarity search
     run_demo_query(vector_store, query=DEMO_QUERY, k=TOP_K)
 
-    logger.info("🏁 Pipeline finished successfully.")
+    logger.info("Pipeline finished successfully.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

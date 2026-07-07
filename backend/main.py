@@ -45,22 +45,22 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown hooks."""
-    logger.info("🚀 Starting %s …", settings.app_title)
+    logger.info("Starting %s ...", settings.app_title)
     
     # Ping MongoDB to verify connection
     try:
         client = get_client()
         await client.admin.command('ping')
-        logger.info("✔ Successfully connected to MongoDB.")
+        logger.info("Successfully connected to MongoDB.")
     except Exception as exc:
-        logger.exception("✘ Failed to connect to MongoDB.")
+        logger.exception("Failed to connect to MongoDB.")
         raise SystemExit(1) from exc
 
     yield
 
-    logger.info("👋 Shutting down database connections.")
+    logger.info("Shutting down database connections.")
     close_db()
-    logger.info("👋 Shutdown complete.")
+    logger.info("Shutdown complete.")
 
 
 # ---------------------------------------------------------------------------

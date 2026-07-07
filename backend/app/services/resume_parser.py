@@ -67,7 +67,7 @@ def extract_skills_from_pdf(file_bytes: bytes) -> list[str]:
     ValueError
         If the PDF cannot be read or contains no extractable text.
     """
-    logger.info("📄 Parsing PDF for skill extraction …")
+    logger.info("Parsing PDF for skill extraction ...")
 
     try:
         reader = PdfReader(io.BytesIO(file_bytes))

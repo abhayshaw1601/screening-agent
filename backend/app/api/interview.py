@@ -144,7 +144,7 @@ async def start_interview(
         logger.exception("Failed to write to MongoDB for session %s", session_id)
         raise HTTPException(status_code=500, detail="Database write failed.")
 
-    logger.info("✔ Created MongoDB session %s (role=%s, skills=%s)", session_id, role, skills)
+    logger.info("Created MongoDB session %s (role=%s, skills=%s)", session_id, role, skills)
 
     return StartInterviewResponse(
         session_id=session_id,
@@ -205,7 +205,7 @@ async def submit_answer(
         )
 
     latest_log.answer = body.answer
-    logger.info("✔ Answer saved for session %s, step %d", body.session_id, session_doc.current_step)
+    logger.info("Answer saved for session %s, step %d", body.session_id, session_doc.current_step)
 
     # --- Rebuild answer_history/question_history from logs -----------------
     question_history = [log.question for log in session_doc.logs]
@@ -247,7 +247,7 @@ async def submit_answer(
             logger.exception("Failed to update final session state in MongoDB: %s", body.session_id)
             raise HTTPException(status_code=500, detail="Database write failed.")
 
-        logger.info("✅ MongoDB Session %s COMPLETED.", body.session_id)
+        logger.info("MongoDB Session %s COMPLETED.", body.session_id)
 
         return SubmitAnswerResponse(
             is_completed=True,
@@ -280,7 +280,7 @@ async def submit_answer(
         logger.exception("Failed to add next question to MongoDB session %s", body.session_id)
         raise HTTPException(status_code=500, detail="Database write failed.")
 
-    logger.info("→ Next question generated for session %s (step %d)", body.session_id, next_step)
+    logger.info("Next question generated for session %s (step %d)", body.session_id, next_step)
 
     return SubmitAnswerResponse(
         is_completed=False,
