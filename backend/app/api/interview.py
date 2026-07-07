@@ -38,6 +38,10 @@ from app.services.resume_parser import (
     extract_skills_from_pdf,
     extract_resume_text_from_pdf,
 )
+from app.rag.ingest import (
+    create_session_store,
+    cleanup_session_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +97,16 @@ async def start_interview(
 
     session_id = str(uuid.uuid4())
 
-    # --- LLM Parsing & Pregeneration -----------------------------------------
+    # --- RAG: Ingest resume into per-session ChromaDB collection -----------
     try:
-        result = parse_resume_and_generate_questions(role.strip(), resume_text, skills)
+        stored_chunks = create_session_store(session_id, resume_text)
+        logger.info("Ingested %d resume chunks into ChromaDB for session %s", len(stored_chunks), session_id)
+    except Exception as exc:
+        logger.warning("RAG ingestion failed for session %s: %s (continuing without RAG)", session_id, exc)
+
+    # --- LLM Parsing & Pregeneration (now with RAG context) ----------------
+    try:
+        result = parse_resume_and_generate_questions(role.strip(), resume_text, skills, session_id=session_id)
     except Exception as exc:
         logger.exception("Failed to parse resume and pregenerate questions for session %s", session_id)
         raise HTTPException(status_code=500, detail="Failed to initialize screening questions.")
@@ -109,10 +120,12 @@ async def start_interview(
     candidate_name = result.get("name")
     candidate_email = result.get("email")
     candidate_phone = result.get("phone")
+    retrieved_contexts = result.get("retrieved_contexts", [[] for _ in range(5)])
 
     # --- Create embedded log & document ------------------------------------
     first_log = InterviewLogDB(
         question=first_question,
+        retrieved_context=retrieved_contexts[0] if retrieved_contexts else [],
         timestamp=datetime.now(timezone.utc),
     )
 
@@ -128,6 +141,7 @@ async def start_interview(
         candidate_phone=candidate_phone,
         resume_text=resume_text,
         pregenerated_questions=pregenerated,
+        retrieved_contexts_per_question=retrieved_contexts,
         logs=[first_log],
     )
 
@@ -210,10 +224,17 @@ async def submit_answer(
                 skills=session_doc.skills,
                 logs=session_doc.logs,
                 resume_text=session_doc.resume_text or "",
+                session_id=body.session_id,
             )
         except Exception as exc:
             logger.exception("LLM evaluation execution failed: %s", exc)
             summary = "Evaluation report generation failed. All turns were completed successfully."
+
+        # Clean up ChromaDB session collection after evaluation
+        try:
+            cleanup_session_store(body.session_id)
+        except Exception as exc:
+            logger.warning("Failed to clean up ChromaDB for session %s: %s", body.session_id, exc)
 
         session_doc.status = "COMPLETED"
         session_doc.evaluation_summary = summary
@@ -246,8 +267,16 @@ async def submit_answer(
     next_question = session_doc.pregenerated_questions[session_doc.current_step]
     next_step = session_doc.current_step + 1
 
+    # Get retrieved context for this question (if available)
+    next_q_context = []
+    if hasattr(session_doc, 'retrieved_contexts_per_question') and session_doc.retrieved_contexts_per_question:
+        idx = session_doc.current_step
+        if idx < len(session_doc.retrieved_contexts_per_question):
+            next_q_context = session_doc.retrieved_contexts_per_question[idx]
+
     next_log = InterviewLogDB(
         question=next_question,
+        retrieved_context=next_q_context,
         timestamp=datetime.now(timezone.utc),
     )
     session_doc.logs.append(next_log)
@@ -309,6 +338,7 @@ async def get_interview_summary(
             LogEntry(
                 question=log.question,
                 answer=log.answer,
+                retrieved_context=log.retrieved_context,
                 timestamp=log.timestamp,
             )
             for log in session_doc.logs

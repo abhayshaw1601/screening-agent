@@ -1,16 +1,15 @@
 """
-ingest.py — Phase 1: Knowledge-Base Ingestion Pipeline
-=======================================================
-Standalone script that parses a role-specific ML textbook PDF,
-chunks its text, generates embeddings via Gemini, and persists
-them into a local ChromaDB vector store.
+ingest.py — RAG Ingestion & Retrieval Pipeline
+=================================================
+Provides reusable functions to:
+  1. Ingest a candidate's resume text into a per-session ChromaDB collection
+     (chunk → embed → store).
+  2. Retrieve relevant chunks via similarity search for question generation
+     and answer evaluation.
+  3. Clean up session-specific collections after evaluation.
 
-Usage:
-    # First run  → full pipeline (load → chunk → embed → store)
-    python app/rag/ingest.py
-
-    # Subsequent runs → skips ingestion, loads existing DB, runs demo query
-    python app/rag/ingest.py
+Also retains the original standalone CLI pipeline for backward compatibility
+with the `ml_book.pdf` workflow.
 
 Environment:
     GEMINI_API_KEY (or GOOGLE_API_KEY) must be set.
@@ -22,9 +21,10 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Logging — single, consistent format for every log line
+# Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -38,15 +38,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
-
+from langchain_core.documents import Document
 
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
 BACKEND_DIR: Path = Path(__file__).resolve().parents[2]          # …/backend
 
+# Legacy standalone pipeline paths
 PDF_PATH: Path = BACKEND_DIR / "knowledge_base" / "ml_book.pdf"
 CHROMA_PERSIST_DIR: Path = BACKEND_DIR / "chroma_db"
 
@@ -55,9 +56,9 @@ CHUNK_SIZE: int = 600
 CHUNK_OVERLAP: int = 60
 
 # Embedding model — Google GenAI default
-EMBEDDING_MODEL: str = "models/text-embedding-004"
+EMBEDDING_MODEL: str = "gemini-embedding-2"
 
-# Chroma collection
+# Legacy collection
 COLLECTION_NAME: str = "ml_textbook"
 
 # Demo query for the CLI smoke-test
@@ -80,21 +81,173 @@ def _validate_environment() -> str:
             "Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set. "
             "Export it in your shell or add it to a .env file."
         )
-        raise SystemExit(1)
-    logger.info("Gemini API Key detected.")
+        raise RuntimeError("Gemini API key not configured.")
     return api_key
 
 
-def _get_embeddings(api_key: str) -> GoogleGenAIEmbeddings:
-    """Return a configured GoogleGenAIEmbeddings instance."""
-    return GoogleGenAIEmbeddings(
+def _get_embeddings(api_key: str | None = None) -> GoogleGenerativeAIEmbeddings:
+    """Return a configured GoogleGenerativeAIEmbeddings instance."""
+    if api_key is None:
+        api_key = _validate_environment()
+    return GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
         google_api_key=api_key,
     )
 
 
+def _get_session_collection_name(session_id: str) -> str:
+    """Generate a ChromaDB collection name for a given session.
+
+    ChromaDB collection names must be 3-63 chars, start/end with
+    alphanumeric, and contain only alphanumeric, underscores, or hyphens.
+    """
+    # Sanitise UUID: replace dashes with underscores, prefix with 's_'
+    safe_id = session_id.replace("-", "_")
+    name = f"s_{safe_id}"
+    # Truncate to 63 chars max
+    return name[:63]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Pipeline stages
+# SESSION-BASED RAG FUNCTIONS (used by the API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def create_session_store(session_id: str, resume_text: str) -> list[str]:
+    """Chunk the resume text, embed it, and store in a per-session ChromaDB collection.
+
+    Parameters
+    ----------
+    session_id : str
+        Unique interview session identifier (UUID).
+    resume_text : str
+        Raw text extracted from the candidate's resume PDF.
+
+    Returns
+    -------
+    list[str]
+        The list of chunk texts that were stored (for traceability / logging).
+    """
+    logger.info("[RAG] Creating session vector store for session: %s", session_id)
+
+    if not resume_text or not resume_text.strip():
+        logger.warning("[RAG] Empty resume text — skipping vector store creation.")
+        return []
+
+    # 1. Chunk the resume text
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+
+    # Wrap plain text into a LangChain Document
+    documents = [Document(page_content=resume_text, metadata={"source": "resume", "session_id": session_id})]
+    chunks = splitter.split_documents(documents)
+
+    if not chunks:
+        logger.warning("[RAG] Chunking produced 0 chunks.")
+        return []
+
+    logger.info("[RAG]   → Produced %d chunk(s) from resume text.", len(chunks))
+
+    # 2. Embed and store
+    api_key = _validate_environment()
+    embeddings = _get_embeddings(api_key)
+    collection_name = _get_session_collection_name(session_id)
+
+    vector_store = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        persist_directory=str(CHROMA_PERSIST_DIR),
+        collection_name=collection_name,
+    )
+
+    chunk_texts = [chunk.page_content for chunk in chunks]
+
+    logger.info(
+        "[RAG]   → Stored %d chunk(s) in collection '%s'.",
+        len(chunks),
+        collection_name,
+    )
+
+    return chunk_texts
+
+
+def retrieve_context(
+    session_id: str,
+    query: str,
+    k: int = 5,
+) -> list[str]:
+    """Retrieve the top-k most relevant resume chunks for a given query.
+
+    Parameters
+    ----------
+    session_id : str
+        The interview session whose resume collection to search.
+    query : str
+        The search query (e.g. a skill, a topic, or an answer to verify).
+    k : int
+        Number of top results to return.
+
+    Returns
+    -------
+    list[str]
+        Top-k chunk texts, ordered by relevance. Empty list if the
+        collection doesn't exist or the query fails.
+    """
+    collection_name = _get_session_collection_name(session_id)
+    logger.info("[RAG] Retrieving context from '%s' for query: %.80s...", collection_name, query)
+
+    try:
+        api_key = _validate_environment()
+        embeddings = _get_embeddings(api_key)
+
+        vector_store = Chroma(
+            persist_directory=str(CHROMA_PERSIST_DIR),
+            embedding_function=embeddings,
+            collection_name=collection_name,
+        )
+
+        results = vector_store.similarity_search(query, k=k)
+
+        if not results:
+            logger.info("[RAG]   → No results found.")
+            return []
+
+        chunk_texts = [doc.page_content for doc in results]
+        logger.info("[RAG]   → Retrieved %d chunk(s).", len(chunk_texts))
+        return chunk_texts
+
+    except Exception as exc:
+        logger.warning("[RAG] Retrieval failed for session %s: %s", session_id, exc)
+        return []
+
+
+def cleanup_session_store(session_id: str) -> None:
+    """Delete the ChromaDB collection for a completed session.
+
+    Parameters
+    ----------
+    session_id : str
+        The interview session whose collection should be removed.
+    """
+    collection_name = _get_session_collection_name(session_id)
+    logger.info("[RAG] Cleaning up collection '%s' ...", collection_name)
+
+    try:
+        import chromadb
+
+        client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR))
+        client.delete_collection(name=collection_name)
+        logger.info("[RAG]   → Collection '%s' deleted.", collection_name)
+    except Exception as exc:
+        # Non-fatal: log and move on
+        logger.warning("[RAG] Failed to delete collection '%s': %s", collection_name, exc)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LEGACY STANDALONE PIPELINE (CLI backward compatibility)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -137,7 +290,7 @@ def chunk_documents(
 
 def create_vector_store(
     chunks: list,
-    embeddings: GoogleGenAIEmbeddings,
+    embeddings: GoogleGenerativeAIEmbeddings,
     persist_dir: Path,
 ) -> Chroma:
     """Embed chunks and persist them into a local ChromaDB collection."""
@@ -161,7 +314,7 @@ def create_vector_store(
 
 
 def load_existing_store(
-    embeddings: GoogleGenAIEmbeddings,
+    embeddings: GoogleGenerativeAIEmbeddings,
     persist_dir: Path,
 ) -> Chroma:
     """Load an already-persisted ChromaDB collection from disk."""
@@ -211,7 +364,7 @@ def run_demo_query(vector_store: Chroma, query: str, k: int = TOP_K) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Orchestrator
+# Legacy Orchestrator
 # ═══════════════════════════════════════════════════════════════════════════
 
 

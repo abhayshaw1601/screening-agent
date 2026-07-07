@@ -54,6 +54,10 @@ class LogEntry(BaseModel):
 
     question: str
     answer: Optional[str] = None
+    retrieved_context: list[str] = Field(
+        default_factory=list,
+        description="Resume chunks retrieved from ChromaDB that grounded this question",
+    )
     timestamp: datetime
 
 
@@ -79,6 +83,10 @@ class InterviewLogDB(BaseModel):
 
     question: str
     answer: Optional[str] = None
+    retrieved_context: list[str] = Field(
+        default_factory=list,
+        description="Resume chunks retrieved from ChromaDB that grounded this question",
+    )
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -99,6 +107,10 @@ class InterviewSessionDB(BaseModel):
     candidate_phone: Optional[str] = None
     resume_text: Optional[str] = None
     pregenerated_questions: list[str] = Field(default_factory=list)
+    retrieved_contexts_per_question: list[list[str]] = Field(
+        default_factory=list,
+        description="Retrieved resume chunks that grounded each pregenerated question",
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )

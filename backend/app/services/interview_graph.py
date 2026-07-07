@@ -63,7 +63,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CHAT_MODEL: str = "gemini-2.5-flash-lite"
+CHAT_MODEL: str = "gemini-3.1-flash-lite"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -108,24 +108,88 @@ def _get_llm() -> ChatGoogleGenerativeAI:
     )
 
 
-def parse_resume_and_generate_questions(role: str, resume_text: str, skills: list[str]) -> dict:
-    """Extract candidate credentials and pregenerate 5 screening questions via Gemini."""
+def _get_clean_content(response) -> str:
+    """Safely extract and clean content from a LangChain LLM response.
+
+    Handles cases where the response content is returned as a list of components
+    instead of a raw string.
+    """
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return content.strip()
+    elif isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                text_parts.append(part["text"])
+        return "".join(text_parts).strip()
+    return str(content).strip()
+
+
+def parse_resume_and_generate_questions(role: str, resume_text: str, skills: list[str], session_id: str = "") -> dict:
+    """Extract candidate credentials and pregenerate 5 screening questions via Gemini.
+    
+    Uses RAG retrieval from the session's ChromaDB collection to ground
+    questions in specific resume content rather than relying solely on
+    the raw text dump.
+    """
     import json
     llm = _get_llm()
+
+    # --- RAG Retrieval: fetch relevant resume chunks per skill ----------
+    rag_context = ""
+    all_retrieved_chunks: list[list[str]] = []
+    if session_id:
+        try:
+            from app.rag.ingest import retrieve_context
+            # Build queries from skills + role to retrieve targeted resume sections
+            all_chunks = []
+            for skill in skills[:5]:  # Limit to top 5 skills
+                query = f"{skill} experience projects work {role}"
+                chunks = retrieve_context(session_id, query, k=3)
+                all_chunks.extend(chunks)
+            # Deduplicate while preserving order
+            seen = set()
+            unique_chunks = []
+            for chunk in all_chunks:
+                if chunk not in seen:
+                    seen.add(chunk)
+                    unique_chunks.append(chunk)
+            if unique_chunks:
+                rag_context = "\n\n---\n\n".join(unique_chunks[:10])  # Cap at 10 chunks
+                logger.info("[RAG] Retrieved %d unique resume chunks for question generation.", len(unique_chunks[:10]))
+            # Store per-question context (distribute chunks across 5 questions)
+            for i in range(5):
+                start = (i * len(unique_chunks)) // 5
+                end = ((i + 1) * len(unique_chunks)) // 5
+                all_retrieved_chunks.append(unique_chunks[start:end] if unique_chunks else [])
+        except Exception as exc:
+            logger.warning("[RAG] Failed to retrieve context for question generation: %s", exc)
+            all_retrieved_chunks = [[] for _ in range(5)]
+    else:
+        all_retrieved_chunks = [[] for _ in range(5)]
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 "You are an expert technical recruiter and interviewer. "
                 "Your task is to parse the candidate's resume content and generate a structured screening plan for the role of **{role}** (skills: {skills}).\n\n"
+                "Retrieved Resume Context (key sections from knowledge base):\n"
+                "--- START RETRIEVED CONTEXT ---\n"
+                "{rag_context}\n"
+                "--- END RETRIEVED CONTEXT ---\n\n"
                 "Instructions:\n"
                 "1. Extract the candidate's personal details from the resume:\n"
                 "   - Full Name (if not found, return null)\n"
                 "   - Email Address (if not found, return null)\n"
                 "   - Phone Number (if not found, return null)\n"
                 "2. Pregenerate exactly 5 targeted technical screening questions:\n"
-                "   - Ground the questions in technical details from the resume.\n"
+                "   - Ground the questions in the retrieved context above — reference specific projects, technologies, or claims from the resume.\n"
                 "   - Structure them progressively in difficulty (Q1-Q2: core, Q3-Q4: scenario/system, Q5: optimization/trade-offs).\n"
+                "   - Questions must probe whether the candidate truly understands what their resume claims.\n"
                 "3. Output ONLY a valid JSON object with the following schema (no markdown formatting, no prefix/suffix text):\n"
                 "{{\n"
                 "  \"name\": \"Candidate Full Name or null\",\n"
@@ -142,7 +206,7 @@ def parse_resume_and_generate_questions(role: str, resume_text: str, skills: lis
             ),
             (
                 "human",
-                "Here is the candidate's resume content to parse and generate questions for:\n"
+                "Here is the candidate's full resume content to parse and generate questions for:\n"
                 "--- START RESUME ---\n"
                 "{resume_text}\n"
                 "--- END RESUME ---"
@@ -154,9 +218,10 @@ def parse_resume_and_generate_questions(role: str, resume_text: str, skills: lis
         response = chain.invoke({
             "role": role,
             "skills": ", ".join(skills),
+            "rag_context": rag_context or "(No retrieved context available)",
             "resume_text": resume_text,
         })
-        text = response.content.strip()
+        text = _get_clean_content(response)
         
         print("\n================== RAW GEMINI RESPONSE ==================")
         print(text)
@@ -180,7 +245,8 @@ def parse_resume_and_generate_questions(role: str, resume_text: str, skills: lis
                     "name": data.get("name"),
                     "email": data.get("email"),
                     "phone": data.get("phone"),
-                    "questions": [str(q) for q in qs[:5]]
+                    "questions": [str(q) for q in qs[:5]],
+                    "retrieved_contexts": all_retrieved_chunks[:5],
                 }
             else:
                 print(">>> WARNING: questions key not found or less than 5 items in parsed dict")
@@ -203,14 +269,40 @@ def parse_resume_and_generate_questions(role: str, resume_text: str, skills: lis
             f"Can you explain a challenging technical trade-off you had to make in your recent role?",
             f"How do you ensure zero-downtime deployments and operational reliability in production?",
             f"Describe how you profile, debug, and optimize performance bottleneck latency constraints."
-        ]
+        ],
+        "retrieved_contexts": [[] for _ in range(5)],
     }
 
 
-def evaluate_interview_transcript(role: str, skills: list[str], logs: list, resume_text: str) -> str:
-    """Use Gemini to evaluate candidate's answers against pregenerated questions and resume context."""
+def evaluate_interview_transcript(role: str, skills: list[str], logs: list, resume_text: str, session_id: str = "") -> str:
+    """Use Gemini to evaluate candidate's answers against resume claims.
+    
+    For each Q&A pair, retrieves relevant resume chunks from ChromaDB
+    to cross-reference what the resume claims vs what the candidate
+    actually demonstrated in their answers.
+    """
     llm = _get_llm()
     
+    # --- RAG Retrieval: for each answer, find matching resume claims ------
+    rag_verification = ""
+    if session_id:
+        try:
+            from app.rag.ingest import retrieve_context
+            verification_sections = []
+            for i, log in enumerate(logs):
+                if log.answer:
+                    chunks = retrieve_context(session_id, log.answer, k=3)
+                    if chunks:
+                        section = f"Q{i+1} — Resume sections relevant to the answer:\n"
+                        for j, chunk in enumerate(chunks):
+                            section += f"  Chunk {j+1}: {chunk[:200]}...\n"
+                        verification_sections.append(section)
+            if verification_sections:
+                rag_verification = "\n".join(verification_sections)
+                logger.info("[RAG] Retrieved verification context for %d answers.", len(verification_sections))
+        except Exception as exc:
+            logger.warning("[RAG] Failed to retrieve verification context: %s", exc)
+
     # Format Q&A transcript
     transcript_lines = []
     for i, log in enumerate(logs):
@@ -228,16 +320,25 @@ def evaluate_interview_transcript(role: str, skills: list[str], logs: list, resu
                 "--- START RESUME ---\n"
                 "{resume_text}\n"
                 "--- END RESUME ---\n\n"
+                "Resume Sections Matched to Each Answer (from vector database retrieval):\n"
+                "--- START RAG VERIFICATION ---\n"
+                "{rag_verification}\n"
+                "--- END RAG VERIFICATION ---\n\n"
                 "Interview Q&A Transcript:\n"
                 "--- START TRANSCRIPT ---\n"
                 "{transcript}\n"
                 "--- END TRANSCRIPT ---\n\n"
+                "CRITICAL EVALUATION INSTRUCTIONS:\n"
+                "- Use the RAG VERIFICATION section above to cross-reference what the resume CLAIMS vs what the candidate ACTUALLY demonstrated.\n"
+                "- If the resume claims expertise in X but the candidate's answer shows no depth, flag this as a discrepancy.\n"
+                "- If the candidate's answer aligns well with their resume claims, note this as a strength.\n\n"
                 "Produce a structured evaluation report that includes:\n"
                 "1. **Overall Assessment** — 2–3 sentence critical analysis of candidate's core depth.\n"
                 "2. **Strengths** — bullet points.\n"
                 "3. **Areas for Improvement** — bullet points highlighting sparse explanations or failures.\n"
-                "4. **Recommended Next Steps** — e.g. reject, re-evaluate, or advance.\n"
-                "5. **Score** — a rating out of 10. Grading must be extremely strict and unforgiving. "
+                "4. **Resume vs Reality** — explicitly compare resume claims against demonstrated knowledge.\n"
+                "5. **Recommended Next Steps** — e.g. reject, re-evaluate, or advance.\n"
+                "6. **Score** — a rating out of 10. Grading must be extremely strict and unforgiving. "
                 "If the candidate gives bad, short, vague, placeholder, or superficial answers, "
                 "be a devil's advocate and score them severely (e.g. 0.5/10, 1/10, or 2/10). "
                 "Do not award high scores (8/10 or above) unless answers are exceptionally deep, precise, and correct.",
@@ -255,9 +356,10 @@ def evaluate_interview_transcript(role: str, skills: list[str], logs: list, resu
             "role": role,
             "skills": ", ".join(skills),
             "resume_text": resume_text,
+            "rag_verification": rag_verification or "(No RAG verification data available)",
             "transcript": transcript,
         })
-        eval_text = response.content.strip()
+        eval_text = _get_clean_content(response)
         print("\n================== RAW EVALUATION REPORT ==================")
         print(eval_text)
         print("===========================================================\n")
@@ -355,7 +457,7 @@ def generate_question_node(state: InterviewState) -> dict:
         }
     )
 
-    new_question = response.content.strip()
+    new_question = _get_clean_content(response)
     logger.info("   → Generated question: %s", new_question[:120])
 
     # Partial state update
@@ -418,7 +520,7 @@ def finalize_interview_node(state: InterviewState) -> dict:
         }
     )
 
-    summary = response.content.strip()
+    summary = _get_clean_content(response)
     logger.info("   → Evaluation generated (%d chars).", len(summary))
 
     return {
