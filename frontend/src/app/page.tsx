@@ -76,6 +76,31 @@ function renderMarkdown(text: string): React.ReactNode {
   return (
     <div className="text-left font-sans">
       {lines.map((line, idx) => {
+        // #### H4
+        if (line.startsWith("#### ")) {
+          return (
+            <h4 key={idx} className="text-[11px] font-semibold text-white/90 mt-4 mb-1.5 font-mono tracking-wide">
+              {parseInlineMarkdown(line.slice(5))}
+            </h4>
+          );
+        }
+        // ### H3
+        if (line.startsWith("### ")) {
+          return (
+            <h3 key={idx} className="text-xs font-bold text-white mt-5 mb-2 font-mono uppercase tracking-wide">
+              {parseInlineMarkdown(line.slice(4))}
+            </h3>
+          );
+        }
+        // ## H2
+        if (line.startsWith("## ")) {
+          return (
+            <h2 key={idx} className="text-sm font-semibold text-white mt-5 mb-2 font-mono uppercase tracking-wide border-b border-white/10 pb-2">
+              {parseInlineMarkdown(line.slice(3))}
+            </h2>
+          );
+        }
+        // # H1
         if (line.startsWith("# ")) {
           return (
             <h1 key={idx} className="text-base font-bold text-white mt-6 mb-3 font-mono border-b border-white/10 pb-2 uppercase tracking-wide">
@@ -83,14 +108,21 @@ function renderMarkdown(text: string): React.ReactNode {
             </h1>
           );
         }
-        if (line.startsWith("## ")) {
+        // Horizontal rule
+        if (/^-{3,}$/.test(line.trim()) || /^\*{3,}$/.test(line.trim())) {
+          return <hr key={idx} className="border-white/10 my-4" />;
+        }
+        // Numbered list (e.g. "1. ", "2. ")
+        if (/^\d+\.\s/.test(line.trim())) {
+          const content = line.trim().replace(/^\d+\.\s/, "");
           return (
-            <h2 key={idx} className="text-xs font-semibold text-white mt-5 mb-2 font-mono uppercase tracking-wide">
-              {parseInlineMarkdown(line.slice(3))}
-            </h2>
+            <li key={idx} className="list-decimal list-inside text-xs text-white/80 ml-4 mb-1.5 leading-relaxed">
+              {parseInlineMarkdown(content)}
+            </li>
           );
         }
-        if (line.trim().startsWith("- ")) {
+        // Bullet list
+        if (line.trim().startsWith("- ") || line.trim().startsWith("* ")) {
           const content = line.trim().slice(2);
           return (
             <li key={idx} className="list-disc list-inside text-xs text-white/80 ml-4 mb-1.5 leading-relaxed">
@@ -98,9 +130,11 @@ function renderMarkdown(text: string): React.ReactNode {
             </li>
           );
         }
+        // Empty line
         if (!line.trim()) {
           return <div key={idx} className="h-1.5" />;
         }
+        // Default paragraph
         return (
           <p key={idx} className="text-xs text-white/80 mb-2 leading-relaxed font-sans">
             {parseInlineMarkdown(line)}
