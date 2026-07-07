@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     google_api_key: str = ""
 
     # --- Database ------------------------------------------------------------
-    database_url: str = "sqlite:///./screener.db"
+    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_db_name: str = "screener_db"
 
     # --- App -----------------------------------------------------------------
     app_title: str = "PG AGI Screener API"

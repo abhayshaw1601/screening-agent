@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import get_client, close_db
 from app.api.interview import router as interview_router
 
 # Ensure Gemini key is visible as env var for LangChain/LangGraph
@@ -40,16 +40,27 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Lifespan — init DB on startup (FastAPI skill: prefer lifespan over events)
+# Lifespan — manage MongoDB connection lifecycle
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown hooks."""
     logger.info("🚀 Starting %s …", settings.app_title)
-    init_db()
-    logger.info("✔ Database tables initialised.")
+    
+    # Ping MongoDB to verify connection
+    try:
+        client = get_client()
+        await client.admin.command('ping')
+        logger.info("✔ Successfully connected to MongoDB.")
+    except Exception as exc:
+        logger.exception("✘ Failed to connect to MongoDB.")
+        raise SystemExit(1) from exc
+
     yield
-    logger.info("👋 Shutting down.")
+
+    logger.info("👋 Shutting down database connections.")
+    close_db()
+    logger.info("👋 Shutdown complete.")
 
 
 # ---------------------------------------------------------------------------
