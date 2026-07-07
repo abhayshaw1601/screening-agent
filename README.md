@@ -4,6 +4,14 @@ This repository contains the architecture, backend engine, and conversational cl
 
 ---
 
+## Tech Stack
+- **Frontend**: `[Next.js 14 (App Router)]` `[React 18]` `[Tailwind CSS]` `[TypeScript]` `[Lucide Icons]`
+- **Backend**: `[FastAPI]` `[Uvicorn]` `[Python 3.11]` `[Motor Async Driver]`
+- **AI/ML Orchestration**: `[LangGraph]` `[LangChain]` `[Google Gemini API]`
+- **Databases**: `[MongoDB]` `[ChromaDB (Vector Store)]`
+
+---
+
 ## 1. Executive Summary and Objective
 
 The objective of this system is to streamline the initial stages of technical recruitment by automating role-specific candidate evaluations. The system operates on three primary architectural pillars:
@@ -18,42 +26,25 @@ By coupling structured database persistence (MongoDB) with state-machine agentic
 
 ## 2. System Architecture Block Diagram
 
-The complete system workspace is organized as a decoupled, multi-tier application. Below is the block diagram representing the data flows and runtime dependencies:
+The complete system workspace is organized as a decoupled, multi-tier application. Below is the Mermaid block diagram representing the data flows and runtime dependencies:
 
-```
-+-----------------------------------------------------------+
-|                    CLIENT VIEWPORT                        |
-|                                                           |
-|             Next.js Frontend Client (App Router)          |
-|             HTML5 / Tailwind CSS / React State            |
-+-----------------------------+-----------------------------+
-                              |
-                              | HTTP REST Requests
-                              v
-+-----------------------------------------------------------+
-|               APPLICATION GATEWAY LAYER                   |
-|                                                           |
-|                 FastAPI (Uvicorn / ASGI)                  |
-|             Request Validation / Pydantic V2              |
-+-----------------------------+-----------------------------+
-                              |
-                              | Method Invocations
-                              v
-+-----------------------------------------------------------+
-|               AGENTIC EXECUTION ENGINE                    |
-|                                                           |
-|           LangGraph State Machine Router                  |
-|          Memory Checkpointer (InMemorySaver)              |
-+--------------+-----------------------------+--------------+
-               |                             |
-               | Similarity Search           | Document Insertion/Query
-               v                             v
-+----------------------------+ +----------------------------+
-|     INGESTION / RAG        | |    PERSISTENCE LAYER       |
-|                            | |                            |
-|      ChromaDB Engine       | |      MongoDB Database      |
-|  Vector Space Storage      | |    Motor Async Driver      |
-+----------------------------+ +----------------------------+
+```mermaid
+graph TD
+    classDef client fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef gateway fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef engine fill:#1e293b,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    classDef storage fill:#1e293b,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+
+    Client["Next.js Frontend Client (App Router)"]:::client
+    Gateway["FastAPI Gateway Layer (Uvicorn / ASGI)"]:::gateway
+    Engine["LangGraph State Machine Execution Engine"]:::engine
+    Chroma["ChromaDB Vector Storage Engine"]:::storage
+    Mongo["MongoDB State Persistence Engine"]:::storage
+
+    Client -- HTTP REST Requests --> Gateway
+    Gateway -- Invoke Graph / State Inception --> Engine
+    Engine -- Similarity Search RAG --> Chroma
+    Engine -- Persistent State Storage --> Mongo
 ```
 
 ---
@@ -62,47 +53,40 @@ The complete system workspace is organized as a decoupled, multi-tier applicatio
 
 The flowchart below maps the lifecycle of an active interview session from candidate ingestion to final report rendering:
 
-```
-[Candidate Entry: Upload + Role Selection]
-                  |
-                  v
-[Resume Processing: PyPDF Text Extraction]
-                  |
-                  v
-[Identify Tech Keywords / Extract Candidate Skills]
-                  |
-                  v
-[LangGraph Initial State Inception]
-                  |
-                  v
-+-----------> [Loop Check: Question Count < 5?]
-|                 |
-|                 +---> (Yes) ---> [Dynamic RAG Context Query Retrieval]
-|                 |                               |
-|                 |                               v
-|                 |                [LLM Context-Aware Question Gen]
-|                 |                               |
-|                 |                               v
-|                 |                [Yield and Wait for User Answer]
-|                 |                               |
-|                 |                               v
-|                 |                [Receive SubmitAnswer API Request]
-|                 |                               |
-|                 |                               v
-|                 |                [Append Answer & Increment Count]
-|                 |                               |
-|                 +-------------------------------+
-|
-+-----------> (No) ---> [Transition to Finalize Node]
-                          |
-                          v
-                [LLM Evaluation Summary Synthesis]
-                          |
-                          v
-                [Update MongoDB Session Status: COMPLETED]
-                          |
-                          v
-                [Render Performance Insights Screen]
+```mermaid
+flowchart TD
+    classDef step fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef decision fill:#1e293b,stroke:#e2e8f0,stroke-width:2px,color:#f8fafc;
+
+    Start["Candidate Entry: Upload + Role Selection"]:::step
+    Parse["Resume Processing: PyPDF Text Extraction"]:::step
+    Keywords["Identify Keywords & Candidate Skills"]:::step
+    Init["LangGraph State Inception"]:::step
+    LoopCheck{"Loop Check: Step < 5?"}:::decision
+    RAG["Dynamic RAG Context Query Retrieval"]:::step
+    Gen["LLM Context-Aware Question Generation"]:::step
+    Wait["Yield and Wait for User Answer"]:::step
+    Submit["Receive SubmitAnswer API Request"]:::step
+    Update["Append Answer & Increment Step Count"]:::step
+    Finalize["Transition to Finalize Node"]:::step
+    Eval["LLM Evaluation Summary Synthesis"]:::step
+    Complete["Update MongoDB Session Status to COMPLETED"]:::step
+    Render["Render Performance Insights Screen"]:::step
+
+    Start --> Parse
+    Parse --> Keywords
+    Keywords --> Init
+    Init --> LoopCheck
+    LoopCheck -- Yes --> RAG
+    RAG --> Gen
+    Gen --> Wait
+    Wait --> Submit
+    Submit --> Update
+    Update --> LoopCheck
+    LoopCheck -- No --> Finalize
+    Finalize --> Eval
+    Eval --> Complete
+    Complete --> Render
 ```
 
 ---
