@@ -216,20 +216,19 @@ def finalize_interview_node(state: InterviewState) -> dict:
         [
             (
                 "system",
-                "You are a senior technical evaluator. A candidate for the "
-                "role of **{role}** (skills: {skills}) has just completed a "
-                "screening interview.\n\n"
+                "You are a strict, highly critical technical evaluator acting as a devil's advocate. "
+                "A candidate for the role of **{role}** (skills: {skills}) has completed a screening interview.\n\n"
                 "Below is the full transcript.\n\n"
                 "{transcript}\n\n"
                 "Produce a structured evaluation that includes:\n"
-                "1. **Overall Assessment** — 2–3 sentence summary.\n"
+                "1. **Overall Assessment** — 2–3 sentence critical analysis of candidate's core depth.\n"
                 "2. **Strengths** — bullet points.\n"
-                "3. **Areas for Improvement** — bullet points with "
-                "constructive feedback.\n"
-                "4. **Recommended Next Steps** — e.g. advance to next "
-                "round, revisit topics, etc.\n"
-                "5. **Score** — a rating out of 10.\n\n"
-                "Be fair, specific, and actionable.",
+                "3. **Areas for Improvement** — bullet points highlighting sparse explanations or failures.\n"
+                "4. **Recommended Next Steps** — e.g. reject, re-evaluate, or advance.\n"
+                "5. **Score** — a rating out of 10. Grading must be extremely strict and unforgiving. "
+                "If the candidate gives bad, short, vague, placeholder, or superficial answers, "
+                "be a devil's advocate and score them severely (e.g. 0.5/10, 1/10, or 2/10). "
+                "Do not award high scores (8/10 or above) unless answers are exceptionally deep, precise, and correct.",
             ),
             (
                 "human",

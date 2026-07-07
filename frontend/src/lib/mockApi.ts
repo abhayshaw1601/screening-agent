@@ -131,24 +131,52 @@ export const mockSubmitAnswer = async (
   if (nextStepIndex >= 5) {
     // Generate Final Evaluation
     session.status = "COMPLETED";
+    let totalChars = 0;
+    session.logs.forEach((log) => {
+      if (log.answer) {
+        totalChars += log.answer.trim().length;
+      }
+    });
+    const avgLength = totalChars / 5;
+
+    let mockScore = "8.0 / 10";
+    let mockStatus = "Pass (Advance to System Design Round)";
+    let overallAssessment = `The candidate demonstrated a strong baseline understanding of core engineering principles relevant to **${session.role}**. Throughout the 5-step conversation, their responses showed both conceptual grasp and practical awareness of engineering compromises.`;
+    let improvementsText = "- Deepen understanding of low-level optimization and latency tuning.\n- Could provide more specific examples of dealing with failure recovery.";
+
+    if (avgLength < 15) {
+      mockScore = "0.5 / 10";
+      mockStatus = "Reject (Failed Technical Screening)";
+      overallAssessment = `The candidate gave extremely poor, vague, or placeholder answers. They showed an absolute lack of technical depth or coding experience, resulting in an immediate evaluation fail under strict devil's advocate scrutiny.`;
+      improvementsText = "- Complete lack of technical details or structured responses.\n- Responses were too brief to evaluate any basic concepts.";
+    } else if (avgLength < 45) {
+      mockScore = "3.5 / 10";
+      mockStatus = "Reject (Insufficient Technical Depth)";
+      overallAssessment = `The candidate's answers were excessively brief and superficial. They failed to explain core concepts, optimize choices, or defend architectural trade-offs under critical examination.`;
+      improvementsText = "- Candidate needs to significantly expand on details.\n- Failed to display adequate depth on role-specific questions.";
+    } else if (avgLength < 90) {
+      mockScore = "5.5 / 10";
+      mockStatus = "Borderline (Re-evaluate in follow-up)";
+      overallAssessment = `The candidate has basic familiarity with **${session.role}** but struggled to detail concrete edge cases, optimization profiles, or real-world application architectures.`;
+      improvementsText = "- Responses are clear but lack low-level production details.\n- Provide more detailed optimization choices next time.";
+    }
+
     session.evaluation_summary = `
 # Interview Evaluation Report
 
 ## 1. Overall Assessment
-The candidate demonstrated a strong baseline understanding of core engineering principles relevant to **${session.role}**. Throughout the 5-step conversation, their responses showed both conceptual grasp and practical awareness of engineering compromises.
+${overallAssessment}
 
 ## 2. Strengths
-- **Structured Explanations**: Clear explanation of concepts and architectural trade-offs.
-- **Applied Contextual Knowledge**: Referenced specific technologies (${session.skills.slice(0, 4).join(", ")}) during scenario-based discussions.
-- **Logical Flow**: Maintained consistent rationale across all questions.
+- **Completed Assessment**: Addressed all 5 core checkpoints.
+- **Concept Recognition**: Mentioned role-specific keywords (${session.skills.slice(0, 4).join(", ")}).
 
 ## 3. Areas for Improvement
-- Deepen understanding of low-level optimization and latency tuning.
-- Could provide more specific examples of dealing with failure recovery and operational metrics.
+${improvementsText}
 
 ## 4. Final Recommendation
-- **Recommended Status**: **Pass (Advance to System Design Round)**
-- **Technical Score**: **8.5 / 10**
+- **Recommended Status**: **${mockStatus}**
+- **Technical Score**: **${mockScore}**
     `.trim();
 
     db[session_id] = session;

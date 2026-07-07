@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   Upload,
   ChevronRight,
@@ -116,6 +116,54 @@ function renderMarkdown(text: string): React.ReactNode {
   );
 }
 
+function calculateMetrics(summary: string, logs: LogEntry[]) {
+  let rawScore = 8.0;
+  if (summary) {
+    const scoreRegex = /(?:score|rating)\D*(\d+(?:\.\d+)?)\s*\/\s*10/i;
+    const match = summary.match(scoreRegex);
+    if (match && match[1]) {
+      const val = parseFloat(match[1]);
+      if (!isNaN(val) && val >= 0 && val <= 10) {
+        rawScore = val;
+      }
+    } else {
+      const simpleRegex = /(\d+(?:\.\d+)?)\s*\/\s*10/;
+      const simpleMatch = summary.match(simpleRegex);
+      if (simpleMatch && simpleMatch[1]) {
+        const val = parseFloat(simpleMatch[1]);
+        if (!isNaN(val) && val >= 0 && val <= 10) {
+          rawScore = val;
+        }
+      }
+    }
+  }
+
+  const techDepth = Math.round(rawScore * 10);
+
+  let totalChars = 0;
+  let answerCount = 0;
+  logs.forEach((log) => {
+    if (log.answer) {
+      totalChars += log.answer.length;
+      answerCount++;
+    }
+  });
+  const avgLength = answerCount > 0 ? totalChars / answerCount : 0;
+  let commScore = 75;
+  if (avgLength > 200) commScore = 95;
+  else if (avgLength > 100) commScore = 88;
+  else if (avgLength > 50) commScore = 78;
+  else if (avgLength > 0) commScore = 65;
+
+  const completeness = Math.min(100, Math.round((logs.length / 5) * 100));
+
+  return {
+    techDepth: `${techDepth}%`,
+    communication: `${commScore}%`,
+    completeness: `${completeness}%`
+  };
+}
+
 type ScreenState = "WELCOME" | "CHAT" | "INSIGHTS";
 
 export default function WorkspacePage() {
@@ -143,7 +191,23 @@ export default function WorkspacePage() {
   const [historicalLogs, setHistoricalLogs] = useState<LogEntry[]>([]);
 
   // System validation alerts
-  const [welcomeError, setWelcomeError] = useState<string>("");
+  const [welcomeError, setWelcomeError] = useState<string>(" ");
+
+  // Scrolling & input activation elements
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-scroll chat view to bottom on messages update
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatLog, isWaitingForAi]);
+
+  // Auto-focus/activate response input field when AI completes question generation
+  useEffect(() => {
+    if (!isWaitingForAi && screen === "CHAT") {
+      inputRef.current?.focus();
+    }
+  }, [isWaitingForAi, screen]);
 
   // ---------------------------------------------------------------------------
   // HANDLERS: Welcome / Ingestion Screen
@@ -594,6 +658,7 @@ export default function WorkspacePage() {
                   </div>
                 </motion.div>
               )}
+              <div ref={chatEndRef} />
             </div>
 
             {/* Form input - Styled exactly like WriteMate Prompt Bar */}
@@ -603,6 +668,7 @@ export default function WorkspacePage() {
             >
               <div className="relative flex items-center bg-black border border-white/20 rounded-none focus-within:border-white transition-all duration-300">
                 <input
+                  ref={inputRef}
                   type="text"
                   value={currentAnswer}
                   onChange={(e) => setCurrentAnswer(e.target.value)}
@@ -656,34 +722,37 @@ export default function WorkspacePage() {
 
                 {/* 3 Performance metrics cards with staggered reveal */}
                 <div className="grid grid-cols-3 gap-4 mb-8">
-                  {[
-                    { title: "Technical Depth", score: "88%", label: "Textbook Grounded" },
-                    { title: "Communication", score: "92%", label: "Syntactic Layout" },
-                    { title: "Completeness", score: "80%", label: "Turn Limit Met" },
-                  ].map((metric, i) => (
-                    <motion.div
-                      key={metric.title}
-                      initial={{ opacity: 0, y: 15 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{
-                        type: "spring",
-                        stiffness: 260,
-                        damping: 25,
-                        delay: i * 0.05,
-                      }}
-                      className="p-4 bg-[#111218] border border-white/10 rounded-md"
-                    >
-                      <span className="text-[9px] font-mono uppercase text-white/40 tracking-wider">
-                        {metric.title}
-                      </span>
-                      <div className="text-lg font-bold text-white font-mono mt-1">
-                        {metric.score}
-                      </div>
-                      <div className="text-[9px] font-mono text-white/30 mt-1">
-                        {metric.label}
-                      </div>
-                    </motion.div>
-                  ))}
+                  {(() => {
+                    const metrics = calculateMetrics(evaluationSummary, historicalLogs);
+                    return [
+                      { title: "Technical Depth", score: metrics.techDepth, label: "Textbook Grounded" },
+                      { title: "Communication", score: metrics.communication, label: "Syntactic Layout" },
+                      { title: "Completeness", score: metrics.completeness, label: "Turn Limit Met" },
+                    ].map((metric, i) => (
+                      <motion.div
+                        key={metric.title}
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{
+                          type: "spring",
+                          stiffness: 260,
+                          damping: 25,
+                          delay: i * 0.05,
+                        }}
+                        className="p-4 bg-[#111218] border border-white/10 rounded-md"
+                      >
+                        <span className="text-[9px] font-mono uppercase text-white/40 tracking-wider">
+                          {metric.title}
+                        </span>
+                        <div className="text-lg font-bold text-white font-mono mt-1">
+                          {metric.score}
+                        </div>
+                        <div className="text-[9px] font-mono text-white/30 mt-1">
+                          {metric.label}
+                        </div>
+                      </motion.div>
+                    ));
+                  })()}
                 </div>
 
                 {/* Performance description */}
